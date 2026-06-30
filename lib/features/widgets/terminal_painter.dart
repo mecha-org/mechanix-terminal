@@ -32,6 +32,7 @@ class TerminalPainter extends CustomPainter {
     final textStyle = ui.TextStyle(
       color: textColor,
       fontFamily: fontFamily,
+      fontFamilyFallback: const ['monospace'],
       fontSize: fontSize,
     );
 

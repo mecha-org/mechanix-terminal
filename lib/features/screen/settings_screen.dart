@@ -347,7 +347,7 @@ class _TerminalSettingsPageState extends State<TerminalSettingsPage> {
       child: Text(
         title,
         style: TextStyle(
-          color: color.withOpacity(0.5),
+          color: color.withValues(alpha: 0.5),
           fontSize: 14,
           fontWeight: FontWeight.w500,
           fontFamily: 'monospace',

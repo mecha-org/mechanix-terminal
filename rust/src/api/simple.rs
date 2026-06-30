@@ -24,9 +24,9 @@ fn active_id() -> &'static RwLock<u32> {
 }
 
 #[flutter_rust_bridge::frb(sync)]
-pub fn add_terminal(rows: u16, cols: u16) -> u32 {
+pub fn add_terminal(rows: u16, cols: u16, cwd: Option<String>) -> u32 {
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    let terminal = FlutterTerminal::new(rows, cols);
+    let terminal = FlutterTerminal::new(rows, cols, cwd);
     let mut lock = terminals().write();
     lock.insert(id, terminal);
 
@@ -36,6 +36,12 @@ pub fn add_terminal(rows: u16, cols: u16) -> u32 {
     }
 
     id
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn get_terminal_cwd(id: u32) -> Option<String> {
+    let lock = terminals().read();
+    lock.get(&id).and_then(|t| t.cwd())
 }
 
 #[flutter_rust_bridge::frb(sync)]
@@ -86,6 +92,14 @@ pub fn send_input(id: u32, input: String) {
     let lock = terminals().read();
     if let Some(t) = lock.get(&id) {
         t.write(input);
+    }
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn send_key(id: u32, normal_seq: String, app_seq: String) {
+    let lock = terminals().read();
+    if let Some(t) = lock.get(&id) {
+        t.send_key(&normal_seq, &app_seq);
     }
 }
 

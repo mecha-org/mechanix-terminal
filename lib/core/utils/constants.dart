@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 class Constants {
   static const String dbPath = '.config/mechanix_apps/terminal/objectbox';
 }
+
 class TermTheme {
   final String name;
   final int fg, bg, cursor, selection;
@@ -19,15 +20,7 @@ class TermTheme {
   );
 }
 
-final fontFamilies = [
-  'monospace',
-  'JetBrains Mono',
-  'Fira Code',
-  'Hack',
-  'Source Code Pro',
-  'Inconsolata',
-  'Cascadia Code',
-];
+final fontFamilies = ['monospace', 'MesloLGS NF'];
 
 final terminalThemes = [
   TermTheme(

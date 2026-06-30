@@ -9,8 +9,13 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `active_id`, `terminals`
 
-int addTerminal({required int rows, required int cols}) =>
-    RustLib.instance.api.crateApiSimpleAddTerminal(rows: rows, cols: cols);
+int addTerminal({required int rows, required int cols, String? cwd}) => RustLib
+    .instance
+    .api
+    .crateApiSimpleAddTerminal(rows: rows, cols: cols, cwd: cwd);
+
+String? getTerminalCwd({required int id}) =>
+    RustLib.instance.api.crateApiSimpleGetTerminalCwd(id: id);
 
 void removeTerminal({required int id}) =>
     RustLib.instance.api.crateApiSimpleRemoveTerminal(id: id);
@@ -26,6 +31,16 @@ TerminalFrame? getTerminalFrame({required int id}) =>
 
 void sendInput({required int id, required String input}) =>
     RustLib.instance.api.crateApiSimpleSendInput(id: id, input: input);
+
+void sendKey({
+  required int id,
+  required String normalSeq,
+  required String appSeq,
+}) => RustLib.instance.api.crateApiSimpleSendKey(
+  id: id,
+  normalSeq: normalSeq,
+  appSeq: appSeq,
+);
 
 void pasteTerminal({required int id, required String input}) =>
     RustLib.instance.api.crateApiSimplePasteTerminal(id: id, input: input);

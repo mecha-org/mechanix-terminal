@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:ui' as ui;
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/gestures.dart';
 import 'package:mechanix_terminal/core/utils/constants.dart';
 import 'package:mechanix_terminal/features/data/settings.dart';
 import 'package:mechanix_terminal/features/widgets/terminal_painter.dart';
@@ -148,6 +149,11 @@ class _TerminalViewState extends State<TerminalView>
 
     final defaultValue = defaultMappings[key];
     if (defaultValue != null) {
+      // NOTE: app-cursor-mode handling (DECCKM) intentionally left out here.
+      // Plain bash never switches into application cursor mode, so the
+      // normal-mode sequences in defaultMappings (e.g. '\x1b[A' for Up) are
+      // correct as-is. Re-introduce the _isAppCursor branching below only if
+      // you start feeding full-screen apps (vim, htop) that rely on it.
       return defaultValue;
     }
 
@@ -239,6 +245,7 @@ class _TerminalViewState extends State<TerminalView>
     // Compute char metrics once here so pointer handlers and painter agree.
     final measureStyle = ui.TextStyle(
       fontFamily: fontFamily,
+      fontFamilyFallback: const ['monospace'],
       fontSize: fontSize,
     );
     final measureParaStyle = ui.ParagraphStyle(
@@ -327,10 +334,30 @@ class _TerminalViewState extends State<TerminalView>
               }
             }
           },
-          child: KeyboardListener(
-            focusNode: _focusNode,
-            autofocus: true,
-            onKeyEvent: (KeyEvent event) {
+          // ── CHANGED: Focus instead of KeyboardListener ────────────────────────
+          // Focus.onKeyEvent lets us return KeyEventResult.handled, which stops
+          // the key event from bubbling up to ancestor focus-traversal logic
+          // (e.g. TabBarView/Scrollable default arrow-key focus movement).
+          // KeyboardListener cannot do this — it always lets events propagate,
+          // which is the most common reason Up/Down get "stolen" before they
+          // ever reach the PTY.
+          child: Shortcuts(
+            shortcuts: <ShortcutActivator, Intent>{
+              const SingleActivator(LogicalKeyboardKey.tab): const _TabIntent(),
+            },
+            child: Actions(
+              actions: <Type, Action<Intent>>{
+                _TabIntent: CallbackAction<_TabIntent>(
+                  onInvoke: (intent) {
+                    sendInput(id: widget.terminalId, input: '\t');
+                    return null;
+                  },
+                ),
+              },
+              child: Focus(
+                focusNode: _focusNode,
+                autofocus: true,
+                onKeyEvent: (FocusNode node, KeyEvent event) {
               if (event is KeyDownEvent || event is KeyRepeatEvent) {
                 final key = event.logicalKey;
                 final isAlt = HardwareKeyboard.instance.isAltPressed;
@@ -381,7 +408,7 @@ class _TerminalViewState extends State<TerminalView>
                       Clipboard.setData(ClipboardData(text: text));
                     }
                   }
-                  return;
+                  return KeyEventResult.handled;
                 }
 
                 // Paste clipboard into terminal
@@ -392,7 +419,7 @@ class _TerminalViewState extends State<TerminalView>
                       pasteTerminal(id: widget.terminalId, input: text);
                     }
                   });
-                  return;
+                  return KeyEventResult.handled;
                 }
 
                 if (isAlt && !isCtrl && !isShift) {
@@ -413,15 +440,17 @@ class _TerminalViewState extends State<TerminalView>
                   if (targetIndex != null &&
                       targetIndex < widget.tabController.length) {
                     widget.tabController.animateTo(targetIndex);
-                    return;
+                    return KeyEventResult.handled;
                   }
                 }
 
                 final input = _keyEventToTerminalInput(event);
                 if (input != null) {
                   sendInput(id: widget.terminalId, input: input);
+                  return KeyEventResult.handled;
                 }
               }
+              return KeyEventResult.ignored;
             },
             child: Container(
               color:
@@ -449,7 +478,9 @@ class _TerminalViewState extends State<TerminalView>
               ),
             ),
           ),
-        );
+        ),
+      ),
+    );
       },
     );
   }
@@ -463,4 +494,8 @@ class _TerminalViewState extends State<TerminalView>
     if (parsed == null) return null;
     return Color(parsed);
   }
+}
+
+class _TabIntent extends Intent {
+  const _TabIntent();
 }

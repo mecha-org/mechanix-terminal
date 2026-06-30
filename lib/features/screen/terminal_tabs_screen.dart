@@ -38,8 +38,17 @@ class _TerminalTabsState extends State<TerminalTabs>
   }
 
   void _addTab() {
+    String? currentCwd;
+    if (_tabController != null && _terminalIds.isNotEmpty) {
+      final activeIndex = _tabController!.index;
+      if (activeIndex >= 0 && activeIndex < _terminalIds.length) {
+        final activeId = _terminalIds[activeIndex];
+        currentCwd = getTerminalCwd(id: activeId);
+      }
+    }
+
     setState(() {
-      final id = addTerminal(rows: 24, cols: 80);
+      final id = addTerminal(rows: 24, cols: 80, cwd: currentCwd);
       _terminalIds.add(id);
 
       _tabController?.dispose();

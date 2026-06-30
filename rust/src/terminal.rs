@@ -1,8 +1,8 @@
 use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::grid::{Dimensions, GridCell};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::{Config, Term};
 use parking_lot::RwLock;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
@@ -38,6 +38,7 @@ pub struct FlutterTerminal {
     master_pty: Arc<RwLock<SyncMasterPty>>,
     writer: Arc<RwLock<SyncWriter>>,
     pub dirty: Arc<AtomicBool>,
+    child_pid: Option<i32>,
 }
 
 struct SyncWriter(Box<dyn Write + Send>);
@@ -74,7 +75,7 @@ impl ansi::Timeout for NoopTimeout {
 }
 
 impl FlutterTerminal {
-    pub fn new(rows: u16, cols: u16) -> Self {
+    pub fn new(rows: u16, cols: u16, cwd: Option<String>) -> Self {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -93,10 +94,13 @@ impl FlutterTerminal {
         let term = Arc::new(RwLock::new(term));
         let dirty = Arc::new(AtomicBool::new(true));
 
-        let mut _child = pair
-            .slave
-            .spawn_command(CommandBuilder::new("bash"))
-            .unwrap();
+        let mut cmd = CommandBuilder::new("bash");
+        cmd.env("TERM", "xterm-256color");
+        if let Some(dir) = cwd {
+            cmd.cwd(dir);
+        }
+        let mut _child = pair.slave.spawn_command(cmd).unwrap();
+        let child_pid = pair.master.process_group_leader();
 
         let reader = pair.master.try_clone_reader().unwrap();
         let writer = pair.master.take_writer().unwrap();
@@ -125,6 +129,7 @@ impl FlutterTerminal {
             master_pty: Arc::new(RwLock::new(SyncMasterPty(pair.master))),
             writer: Arc::new(RwLock::new(SyncWriter(writer))),
             dirty,
+            child_pid,
         }
     }
 
@@ -137,7 +142,8 @@ impl FlutterTerminal {
     pub fn paste(&self, mut input: String) {
         let is_bracketed = {
             let term = self.term.read();
-            term.mode().contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE)
+            term.mode()
+                .contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE)
         };
 
         let mut writer = self.writer.write();
@@ -230,5 +236,24 @@ impl FlutterTerminal {
         let mut term = self.term.write();
         term.scroll_display(Scroll::Delta(lines));
         self.dirty.store(true, Ordering::SeqCst);
+    }
+
+    pub fn send_key(&self, normal_seq: &str, app_seq: &str) {
+        let app_cursor = {
+            let term = self.term.read();
+            term.mode()
+                .contains(alacritty_terminal::term::TermMode::APP_CURSOR)
+        };
+        let seq = if app_cursor { app_seq } else { normal_seq };
+        let mut writer = self.writer.write();
+        writer.0.write_all(seq.as_bytes()).unwrap();
+        writer.0.flush().unwrap();
+    }
+
+    pub fn cwd(&self) -> Option<String> {
+        let pid = self.child_pid?;
+        std::fs::read_link(format!("/proc/{}/cwd", pid))
+            .ok()
+            .and_then(|path| path.to_str().map(|s| s.to_string()))
     }
 }
