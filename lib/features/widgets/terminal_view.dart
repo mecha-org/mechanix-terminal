@@ -149,11 +149,6 @@ class _TerminalViewState extends State<TerminalView>
 
     final defaultValue = defaultMappings[key];
     if (defaultValue != null) {
-      // NOTE: app-cursor-mode handling (DECCKM) intentionally left out here.
-      // Plain bash never switches into application cursor mode, so the
-      // normal-mode sequences in defaultMappings (e.g. '\x1b[A' for Up) are
-      // correct as-is. Re-introduce the _isAppCursor branching below only if
-      // you start feeding full-screen apps (vim, htop) that rely on it.
       return defaultValue;
     }
 
