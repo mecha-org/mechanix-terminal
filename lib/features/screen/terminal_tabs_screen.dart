@@ -38,17 +38,8 @@ class _TerminalTabsState extends State<TerminalTabs>
   }
 
   void _addTab() {
-    String? currentCwd;
-    if (_tabController != null && _terminalIds.isNotEmpty) {
-      final activeIndex = _tabController!.index;
-      if (activeIndex >= 0 && activeIndex < _terminalIds.length) {
-        final activeId = _terminalIds[activeIndex];
-        currentCwd = getTerminalCwd(id: activeId);
-      }
-    }
-
     setState(() {
-      final id = addTerminal(rows: 24, cols: 80, cwd: currentCwd);
+      final id = addTerminal(rows: 24, cols: 80);
       _terminalIds.add(id);
 
       _tabController?.dispose();
@@ -100,9 +91,7 @@ class _TerminalTabsState extends State<TerminalTabs>
         }
         if (states.contains(WidgetState.hovered) ||
             states.contains(WidgetState.focused)) {
-          return Colors.white.withValues(
-            alpha: 0.05,
-          );
+          return Colors.white.withValues(alpha: 0.05);
         }
         return null;
       }),

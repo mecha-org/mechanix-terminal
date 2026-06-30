@@ -26,7 +26,18 @@ fn active_id() -> &'static RwLock<u32> {
 #[flutter_rust_bridge::frb(sync)]
 pub fn add_terminal(rows: u16, cols: u16, cwd: Option<String>) -> u32 {
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    let terminal = FlutterTerminal::new(rows, cols, cwd);
+    
+    let resolved_cwd = cwd.or_else(|| {
+        let active = *active_id().read();
+        if active != 0 {
+            let lock = terminals().read();
+            lock.get(&active).and_then(|t| t.cwd())
+        } else {
+            None
+        }
+    });
+
+    let terminal = FlutterTerminal::new(rows, cols, resolved_cwd);
     let mut lock = terminals().write();
     lock.insert(id, terminal);
 
