@@ -255,6 +255,8 @@ class _TerminalSettingsPageState extends State<TerminalSettingsPage> {
     const accentColor = Colors.deepOrange;
 
     final buttonStyle = ButtonStyle(
+      minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
+      tapTargetSize: MaterialTapTargetSize.padded,
       splashFactory: NoSplash.splashFactory,
       overlayColor: WidgetStateProperty.resolveWith<Color?>((
         Set<WidgetState> states,
@@ -275,45 +277,46 @@ class _TerminalSettingsPageState extends State<TerminalSettingsPage> {
       appBar: AppBar(
         backgroundColor: bgColor,
         elevation: 0,
+        toolbarHeight: 52,
         automaticallyImplyLeading: false,
-        title: Row(
-          children: [
-            GestureDetector(
-              onTap: () => Navigator.pop(context),
-              child: Row(
-                children: [
-                  Icon(Icons.arrow_back_ios, size: 16, color: textColor),
-                  SizedBox(width: 4),
-                  Text(
-                    AppLocalizations.of(context)!.settings,
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 16,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Spacer(),
-            TextButton(
-              style: buttonStyle,
-              onPressed: _applySettings,
-              child: Text(
-                AppLocalizations.of(context)!.apply,
-                style: TextStyle(
-                  color: accentColor,
-                  fontSize: 16,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ),
-          ],
+        leadingWidth: 56,
+        leading: IconButton(
+          style: buttonStyle,
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+          icon: const Icon(Icons.arrow_back_ios, size: 16, color: textColor),
+          onPressed: () => Navigator.pop(context),
         ),
+        titleSpacing: 0,
+        title: Text(
+          AppLocalizations.of(context)!.settings,
+          style: const TextStyle(
+            color: textColor,
+            fontSize: 16,
+            fontFamily: 'monospace',
+          ),
+        ),
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 8.0),
+        actions: [
+          TextButton(
+            style: buttonStyle,
+            onPressed: _applySettings,
+            child: Text(
+              AppLocalizations.of(context)!.apply,
+              style: const TextStyle(
+                color: accentColor,
+                fontSize: 16,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+        ],
       ),
       body: ListView(
         children: [
-          _buildSectionHeader(AppLocalizations.of(context)!.customize, textColor),
+          _buildSectionHeader(
+            AppLocalizations.of(context)!.customize,
+            textColor,
+          ),
           _buildDivider(),
           SettingsTile(
             label: AppLocalizations.of(context)!.theme,
@@ -329,13 +332,25 @@ class _TerminalSettingsPageState extends State<TerminalSettingsPage> {
           _buildSectionHeader(AppLocalizations.of(context)!.color, textColor),
 
           _buildDivider(),
-          ColorTile(label: AppLocalizations.of(context)!.foreground, color: _colorFg),
+          ColorTile(
+            label: AppLocalizations.of(context)!.foreground,
+            color: _colorFg,
+          ),
           _buildDivider(),
-          ColorTile(label: AppLocalizations.of(context)!.background, color: _colorBg),
+          ColorTile(
+            label: AppLocalizations.of(context)!.background,
+            color: _colorBg,
+          ),
           _buildDivider(),
-          ColorTile(label: AppLocalizations.of(context)!.cursor, color: _colorCursor),
+          ColorTile(
+            label: AppLocalizations.of(context)!.cursor,
+            color: _colorCursor,
+          ),
           _buildDivider(),
-          ColorTile(label: AppLocalizations.of(context)!.selection, color: _colorSelection),
+          ColorTile(
+            label: AppLocalizations.of(context)!.selection,
+            color: _colorSelection,
+          ),
         ],
       ),
     );

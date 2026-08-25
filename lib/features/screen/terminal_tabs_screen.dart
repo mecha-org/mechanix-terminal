@@ -99,73 +99,70 @@ class _TerminalTabsState extends State<TerminalTabs>
 
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 0,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
-          child: Row(
-            children: [
-              Expanded(
-                child: TabBar(
-                  controller: _tabController,
-                  isScrollable: true,
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 8.0),
-                  tabs: _terminalIds
-                      .asMap()
-                      .entries
-                      .map(
-                        (e) => Tab(
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const SizedBox(width: 8),
-                              Text("Tab ${e.key + 1}"),
-                              IconButton(
-                                iconSize: 16,
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(
-                                  minWidth: 44,
-                                  minHeight: 44,
-                                ),
-                                icon: const Icon(Icons.close),
-                                onPressed: () => _removeTab(e.value),
-                                tooltip: 'Close Tab',
-                              ),
-                            ],
-                          ),
+        toolbarHeight: 52,
+        titleSpacing: 0,
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 8.0),
+        title: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          labelPadding: const EdgeInsets.symmetric(horizontal: 8.0),
+          tabs: _terminalIds
+              .asMap()
+              .entries
+              .map(
+                (e) => Tab(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(width: 8),
+                      Text("Tab ${e.key + 1}"),
+                      IconButton(
+                        iconSize: 16,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 48,
+                          minHeight: 48,
                         ),
-                      )
-                      .toList(),
-                ),
-              ),
-              IconButton(
-                style: buttonStyle,
-                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                icon: const Icon(Icons.add),
-                onPressed: _addTab,
-                tooltip: 'Add Tab',
-              ),
-              IconButton(
-                style: buttonStyle,
-                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                icon: const Icon(Icons.settings),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      fullscreenDialog: true,
-                      builder: (_) => TerminalSettingsPage(
-                        settings: widget.settings,
-                        onSettingsChanged: widget.onSettingsChanged,
+                        icon: const Icon(Icons.close),
+                        onPressed: () => _removeTab(e.value),
+                        tooltip: 'Close Tab',
                       ),
-                    ),
-                  );
-                },
-                tooltip: 'Settings',
-              ),
-            ],
-          ),
+                    ],
+                  ),
+                ),
+              )
+              .toList(),
         ),
+        actions: [
+          IconButton(
+            style: buttonStyle,
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            icon: const Icon(Icons.add),
+            onPressed: _addTab,
+            tooltip: 'Add Tab',
+          ),
+          IconButton(
+            style: buttonStyle,
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  fullscreenDialog: true,
+                  builder: (_) => TerminalSettingsPage(
+                    settings: widget.settings,
+                    onSettingsChanged: widget.onSettingsChanged,
+                  ),
+                ),
+              );
+            },
+            tooltip: 'Settings',
+          ),
+        ],
       ),
+
       body: TabBarView(
         controller: _tabController,
         physics: const NeverScrollableScrollPhysics(),
