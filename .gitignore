@@ -43,3 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Packaging output
+/dist/
+/stage/
+__pycache__/

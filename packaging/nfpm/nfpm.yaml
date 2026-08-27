@@ -1,0 +1,45 @@
+name: mechanix-terminal
+arch: "${PKG_ARCH}"
+platform: linux
+version: "${PKG_VERSION}"
+release: "${PKG_RELEASE}"
+section: utils
+priority: optional
+maintainer: "Minesh Purohit <mineshp@mechasystems.com>"
+description: Mechanix Terminal application
+homepage: https://github.com/mecha-org/mechanix-terminal.git
+license: BSD
+
+overrides:
+  rpm:
+    depends:
+      - mechanix-flutter-engine = 3.47.0
+  deb:
+    depends:
+      - "mechanix-flutter-engine (= 3.47.0)"
+
+contents:
+  - src: ./stage/bundle/mechanix_terminal
+    dst: /usr/share/mechanix/mechanix-terminal/mechanix_terminal
+    file_info:
+      mode: 0755
+  - src: ./stage/bundle/lib/libapp.so
+    dst: /usr/share/mechanix/mechanix-terminal/lib/libapp.so
+  - src: ./stage/bundle/lib/libobjectbox.so
+    dst: /usr/share/mechanix/mechanix-terminal/lib/libobjectbox.so
+  - src: ./stage/bundle/lib/librust_lib_mechanix_terminal.so
+    dst: /usr/share/mechanix/mechanix-terminal/lib/librust_lib_mechanix_terminal.so
+  - src: ./stage/bundle/data
+    dst: /usr/share/mechanix/mechanix-terminal/data
+  - src: ./packaging/nfpm/scripts/launcher.sh
+    dst: /usr/bin/mechanix_terminal
+    file_info:
+      mode: 0755
+  - src: ./org.mechanix.terminal.desktop
+    dst: /usr/share/applications/org.mechanix.terminal.desktop
+  - src: ./assets/desktop_icon.png
+    dst: /usr/share/icons/hicolor/48x48/apps/org.mechanix.terminal.png
+
+scripts:
+  postinstall: ./packaging/nfpm/scripts/postinstall.sh
+  postremove: ./packaging/nfpm/scripts/postremove.sh

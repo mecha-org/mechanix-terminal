@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Mechanix Terminal
+Comment=Terminal for Mechanix OS
+Exec=mechanix_terminal -s 1
+Icon=org.mechanix.terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupNotify=true
+StartupWMClass=org.mechanix.terminal

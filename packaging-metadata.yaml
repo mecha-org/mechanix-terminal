@@ -1,9 +1,0 @@
-name: packaging-metadata
-version: 1.0.0
-summary: Metadata for Mechanix Terminal app packaging
-applications:
-  - name: terminal
-    folder: .
-    binary: mechanix_terminal
-    description: "Mechanix Terminal application"
-    maintainer: "Minesh Purohit <mineshp@mechasystems.com>"
