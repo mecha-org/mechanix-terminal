@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechanix_terminal/features/screen/settings_screen.dart';
 import 'package:mechanix_terminal/features/data/settings.dart';
+import 'package:mechanix_terminal/l10n/app_localizations.dart';
 
 void main() {
   group('TerminalSettingsPage Unit Tests', () {
@@ -22,6 +23,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           theme: ThemeData(useMaterial3: false),
           home: TerminalSettingsPage(
             settings: settings,
@@ -42,8 +45,8 @@ void main() {
       // Verify the passed settings are displayed
       expect(find.text('monospace 16px'), findsOneWidget);
 
-      // Tap on Done to apply settings
-      await tester.tap(find.text('Done'));
+      // Tap on Apply to apply settings
+      await tester.tap(find.text('Apply'));
       await tester.pumpAndSettle();
 
       // Verify onSettingsChanged was called

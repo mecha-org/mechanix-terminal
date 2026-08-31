@@ -54,24 +54,28 @@ class _TerminalTabsState extends State<TerminalTabs>
   void _removeTab(int id) {
     setState(() {
       final indexToRemove = _terminalIds.indexOf(id);
+      final activeId = _terminalIds[_tabController!.index];
+
       removeTerminal(id: id);
       _terminalIds.remove(id);
 
       if (_terminalIds.isEmpty) {
         _addTab();
-      } else {
-        int newIndex = _tabController!.index;
-        if (indexToRemove <= newIndex) {
-          newIndex = (newIndex - 1).clamp(0, _terminalIds.length - 1);
-        }
-
-        _tabController?.dispose();
-        _tabController = TabController(
-          length: _terminalIds.length,
-          vsync: this,
-          initialIndex: newIndex,
-        );
+        return;
       }
+
+      // If active tab still exists, find its shifted index;
+      // otherwise clamp to stay within valid tab bounds.
+      final newIndex = activeId == id
+          ? indexToRemove.clamp(0, _terminalIds.length - 1)
+          : _terminalIds.indexOf(activeId);
+
+      _tabController?.dispose();
+      _tabController = TabController(
+        length: _terminalIds.length,
+        vsync: this,
+        initialIndex: newIndex,
+      );
     });
   }
 
@@ -112,6 +116,7 @@ class _TerminalTabsState extends State<TerminalTabs>
               .entries
               .map(
                 (e) => Tab(
+                  key: ValueKey('tab_${e.value}'),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -168,6 +173,7 @@ class _TerminalTabsState extends State<TerminalTabs>
         physics: const NeverScrollableScrollPhysics(),
         children: _terminalIds.asMap().entries.map((entry) {
           return TerminalView(
+            key: ValueKey('term_${entry.value}'),
             terminalId: entry.value,
             settings: widget.settings,
             tabController: _tabController!,

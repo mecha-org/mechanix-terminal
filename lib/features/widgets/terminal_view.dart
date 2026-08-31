@@ -36,9 +36,6 @@ class _TerminalViewState extends State<TerminalView>
   StreamSubscription? _subscription;
   final FocusNode _focusNode = FocusNode();
 
-  // Estimate height per line dynamically based on font size
-  double get _lineHeight => widget.settings.fontSize * 1.3;
-
   // ── TEXT SELECTION STATE ───────────────────────────────────────────────────
   // Cell coordinates (col, row) for selection anchor and active end.
   ({int col, int row})? _selectionStart;
@@ -80,6 +77,21 @@ class _TerminalViewState extends State<TerminalView>
       if (widget.tabController.index == widget.index) {
         _activateTerminal();
       }
+    }
+    if (oldWidget.terminalId != widget.terminalId ||
+        oldWidget.terminalStream != widget.terminalStream) {
+      _subscription?.cancel();
+      _subscription = widget.terminalStream?.listen((id) {
+        if (id == widget.terminalId && mounted) {
+          final newFrame = getTerminalFrame(id: widget.terminalId);
+          if (newFrame != null) {
+            setState(() {
+              _frame = newFrame;
+            });
+          }
+        }
+      });
+      _frame = getTerminalFrame(id: widget.terminalId);
     }
   }
 
@@ -168,11 +180,13 @@ class _TerminalViewState extends State<TerminalView>
   ({int col, int row}) _pixelToCell(
     Offset position,
     double charWidth,
-    double charHeight,
-  ) {
+    double charHeight, {
+    double padLeft = 0.0,
+    double padTop = 0.0,
+  }) {
     final frame = _frame;
-    int col = (position.dx / charWidth).floor();
-    int row = (position.dy / charHeight).floor();
+    int col = ((position.dx - padLeft) / charWidth).floor();
+    int row = ((position.dy - padTop) / charHeight).floor();
     if (frame != null) {
       col = col.clamp(0, frame.cols - 1);
       row = row.clamp(0, frame.rows - 1);
@@ -202,22 +216,29 @@ class _TerminalViewState extends State<TerminalView>
 
     final buffer = StringBuffer();
     for (int y = a.row; y <= b.row; y++) {
-      final startCol = (y == a.row) ? a.col : 0;
-      final endCol = (y == b.row) ? b.col : frame.cols - 1;
-      final rowStart = y * frame.cols;
+      if (y >= frame.lines.length) break;
+      final line = frame.lines[y];
+      final chars = line.characters.toList();
+
+      final startCol = (y == a.row) ? a.col.clamp(0, frame.cols - 1) : 0;
+      final endCol = (y == b.row) ? b.col.clamp(0, frame.cols - 1) : frame.cols - 1;
 
       bool isWrapped = false;
       if (y < b.row) {
-        final lastColIdx = rowStart + (frame.cols - 1);
-        if (lastColIdx < frame.attributes.length) {
-          isWrapped = (frame.attributes[lastColIdx] & 2) != 0;
+        final lastColIdx = y * frame.cols + (frame.cols - 1);
+        if (lastColIdx < frame.flags.length) {
+          isWrapped = (frame.flags[lastColIdx] & 128) != 0; // bit 7: WRAPLINE
         }
       }
 
       for (int x = startCol; x <= endCol; x++) {
-        final idx = rowStart + x;
-        if (idx < frame.content.length) {
-          buffer.write(frame.content[idx]);
+        if (x < chars.length) {
+          final cellIdx = y * frame.cols + x;
+          final flag = cellIdx < frame.flags.length ? frame.flags[cellIdx] : 0;
+          final isSpacer = (flag & 512) != 0; // bit 9: WIDE_CHAR_SPACER
+          if (!isSpacer) {
+            buffer.write(chars[x]);
+          }
         }
       }
 
@@ -235,17 +256,19 @@ class _TerminalViewState extends State<TerminalView>
     super.build(context);
 
     final fontSize = widget.settings.fontSize;
-    final fontFamily = widget.settings.fontFamily ?? 'monospace';
+    final fontFamily = widget.settings.fontFamily ?? fontFamilies[0];
 
-    // Compute char metrics once here so pointer handlers and painter agree.
+    // Compute char metrics once here with fixed strut/height so pointer handlers and painter agree.
     final measureStyle = ui.TextStyle(
       fontFamily: fontFamily,
       fontFamilyFallback: const ['monospace'],
       fontSize: fontSize,
+      height: 1.2,
     );
     final measureParaStyle = ui.ParagraphStyle(
       fontSize: fontSize,
       fontFamily: fontFamily,
+      height: 1.2,
     );
     final measurePb = ui.ParagraphBuilder(measureParaStyle)
       ..pushStyle(measureStyle)
@@ -257,8 +280,19 @@ class _TerminalViewState extends State<TerminalView>
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final cols = (constraints.maxWidth / charWidth).floor().clamp(10, 500);
-        final rows = (constraints.maxHeight / charHeight).floor().clamp(5, 200);
+        final availableWidth = constraints.maxWidth;
+        final availableHeight = constraints.maxHeight;
+
+        final cols = (availableWidth / charWidth).floor().clamp(10, 500);
+        final rows = (availableHeight / charHeight).floor().clamp(5, 200);
+
+        final gridWidth = cols * charWidth;
+        final gridHeight = rows * charHeight;
+
+        final horizontalPadding =
+            ((availableWidth - gridWidth) / 2.0).clamp(0.0, double.infinity);
+        final verticalPadding =
+            ((availableHeight - gridHeight) / 2.0).clamp(0.0, double.infinity);
 
         final currentFrame = _frame;
         if (currentFrame == null ||
@@ -271,15 +305,24 @@ class _TerminalViewState extends State<TerminalView>
           });
         }
 
+        final activeTheme = terminalThemes.firstWhere(
+          (t) =>
+              _parseHexColor(widget.settings.colorBackground)?.toARGB32() ==
+                  (0xFF000000 | t.bg) ||
+              _parseHexColor(widget.settings.colorForeground)?.toARGB32() ==
+                  (0xFF000000 | t.fg),
+          orElse: () => terminalThemes[0],
+        );
+
         return Listener(
+          behavior: HitTestBehavior.opaque,
           // ── Mouse-wheel scrolling ──────────────────────────────────────────────
           onPointerSignal: (pointerSignal) {
             if (pointerSignal is PointerScrollEvent) {
               // Negate the dy to match Alacritty's scroll direction:
               // Flutter: dy < 0 is wheel UP, dy > 0 is wheel DOWN
               // Alacritty: positive delta scrolls UP (into history), negative delta scrolls DOWN
-              final int lines = (-pointerSignal.scrollDelta.dy / _lineHeight)
-                  .round();
+              final int lines = (-pointerSignal.scrollDelta.dy / charHeight).round();
               if (lines != 0) {
                 scrollTerminal(id: widget.terminalId, lines: lines);
               }
@@ -287,12 +330,18 @@ class _TerminalViewState extends State<TerminalView>
           },
           // ── Left-button down: start selection ─────────────────────────────────
           onPointerDown: (event) {
-            if (event.buttons == kPrimaryMouseButton) {
-              _focusNode.requestFocus();
+            final isPrimary = event.buttons == kPrimaryMouseButton ||
+                event.kind == PointerDeviceKind.touch;
+            if (isPrimary) {
+              if (!_focusNode.hasFocus) {
+                _focusNode.requestFocus();
+              }
               final cell = _pixelToCell(
                 event.localPosition,
                 charWidth,
                 charHeight,
+                padLeft: horizontalPadding,
+                padTop: verticalPadding,
               );
               setState(() {
                 _isSelecting = true;
@@ -303,11 +352,15 @@ class _TerminalViewState extends State<TerminalView>
           },
           // ── Left-button drag: extend selection ────────────────────────────────
           onPointerMove: (event) {
-            if (_isSelecting && event.buttons == kPrimaryMouseButton) {
+            final isPrimary = event.buttons == kPrimaryMouseButton ||
+                event.kind == PointerDeviceKind.touch;
+            if (_isSelecting && isPrimary) {
               final cell = _pixelToCell(
                 event.localPosition,
                 charWidth,
                 charHeight,
+                padLeft: horizontalPadding,
+                padTop: verticalPadding,
               );
               setState(() {
                 _selectionEnd = cell;
@@ -317,14 +370,26 @@ class _TerminalViewState extends State<TerminalView>
           // ── Left-button up: finish & copy ─────────────────────────────────────
           onPointerUp: (event) {
             if (_isSelecting) {
+              final isSingleTap = _selectionStart != null &&
+                  _selectionEnd != null &&
+                  _selectionStart!.col == _selectionEnd!.col &&
+                  _selectionStart!.row == _selectionEnd!.row;
+
               setState(() {
                 _isSelecting = false;
+                if (isSingleTap) {
+                  _selectionStart = null;
+                  _selectionEnd = null;
+                }
               });
-              final frame = _frame;
-              if (frame != null) {
-                final text = _extractSelection(frame);
-                if (text.trim().isNotEmpty) {
-                  Clipboard.setData(ClipboardData(text: text));
+
+              if (!isSingleTap) {
+                final frame = _frame;
+                if (frame != null) {
+                  final text = _extractSelection(frame);
+                  if (text.trim().isNotEmpty) {
+                    Clipboard.setData(ClipboardData(text: text));
+                  }
                 }
               }
             }
@@ -444,25 +509,35 @@ class _TerminalViewState extends State<TerminalView>
                   color:
                       _parseHexColor(widget.settings.colorBackground) ??
                       Theme.of(context).scaffoldBackgroundColor,
-                  child: CustomPaint(
-                    painter: _frame != null
-                        ? TerminalPainter(
-                            _frame!,
-                            fontSize,
-                            _parseHexColor(widget.settings.colorForeground) ??
-                                Theme.of(context).textTheme.bodyMedium?.color ??
-                                Colors.white,
-                            _parseHexColor(widget.settings.colorBackground) ??
-                                Theme.of(context).scaffoldBackgroundColor,
-                            _parseHexColor(widget.settings.colorCursor) ??
-                                Colors.white70,
-                            fontFamily,
-                            widget.terminalId,
-                            selectionStart: _selectionStart,
-                            selectionEnd: _selectionEnd,
-                          )
-                        : null,
-                    child: Container(),
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      left: horizontalPadding,
+                      top: verticalPadding,
+                    ),
+                    child: CustomPaint(
+                      size: Size(gridWidth, gridHeight),
+                      painter: _frame != null
+                          ? TerminalPainter(
+                              _frame!,
+                              fontSize,
+                              charWidth,
+                              charHeight,
+                              _parseHexColor(widget.settings.colorForeground) ??
+                                  Theme.of(context).textTheme.bodyMedium?.color ??
+                                  Colors.white,
+                              _parseHexColor(widget.settings.colorBackground) ??
+                                  Theme.of(context).scaffoldBackgroundColor,
+                              _parseHexColor(widget.settings.colorCursor) ??
+                                  Colors.white70,
+                              fontFamily,
+                              widget.terminalId,
+                              colorPalette: activeTheme.palette,
+                              selectionStart: _selectionStart,
+                              selectionEnd: _selectionEnd,
+                            )
+                          : null,
+                      child: Container(),
+                    ),
                   ),
                 ),
               ),

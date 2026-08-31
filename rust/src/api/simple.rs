@@ -26,7 +26,7 @@ fn active_id() -> &'static RwLock<u32> {
 #[flutter_rust_bridge::frb(sync)]
 pub fn add_terminal(rows: u16, cols: u16, cwd: Option<String>) -> u32 {
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    
+
     let resolved_cwd = cwd.or_else(|| {
         let active = *active_id().read();
         if active != 0 {
@@ -37,16 +37,19 @@ pub fn add_terminal(rows: u16, cols: u16, cwd: Option<String>) -> u32 {
         }
     });
 
-    let terminal = FlutterTerminal::new(rows, cols, resolved_cwd);
-    let mut lock = terminals().write();
-    lock.insert(id, terminal);
+    if let Some(terminal) = FlutterTerminal::new(rows, cols, resolved_cwd) {
+        let mut lock = terminals().write();
+        lock.insert(id, terminal);
 
-    let mut active_lock = active_id().write();
-    if *active_lock == 0 {
-        *active_lock = id;
+        let mut active_lock = active_id().write();
+        if *active_lock == 0 {
+            *active_lock = id;
+        }
+
+        id
+    } else {
+        0
     }
-
-    id
 }
 
 #[flutter_rust_bridge::frb(sync)]
@@ -96,6 +99,14 @@ pub fn create_terminal_stream(sink: StreamSink<u32>) {
 pub fn get_terminal_frame(id: u32) -> Option<TerminalFrame> {
     let lock = terminals().read();
     lock.get(&id).and_then(|t| t.get_frame())
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn is_terminal_closed(id: u32) -> bool {
+    let lock = terminals().read();
+    lock.get(&id)
+        .map(|t| t.is_closed.load(Ordering::SeqCst))
+        .unwrap_or(true)
 }
 
 #[flutter_rust_bridge::frb(sync)]
