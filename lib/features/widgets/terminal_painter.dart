@@ -22,6 +22,7 @@ const List<int> _defaultColorPalette = [
   0xEEEEEC, // 15: Bright White
 ];
 
+/// Custom painter that renders a terminal frame to the canvas with batched drawing optimizations.
 class TerminalPainter extends CustomPainter {
   final TerminalFrame frame;
   final double fontSize;
@@ -52,9 +53,6 @@ class TerminalPainter extends CustomPainter {
   });
 
   /// Resolves an encoded color integer to a concrete Flutter Color.
-  /// - 0: Default color (uses [defaultColor])
-  /// - 0x01000000..0x0100000F: Tagged ANSI 16 color index (looks up in [colorPalette] or [_defaultColorPalette])
-  /// - 0xFFRRGGBB: TrueColor RGB / 256-color palette
   Color _resolveCellColor(int colorCode, Color defaultColor) {
     if (colorCode == 0) {
       return defaultColor;
@@ -80,11 +78,15 @@ class TerminalPainter extends CustomPainter {
 
       for (int col = 0; col < frame.cols; col++) {
         final cellIdx = y * frame.cols + col;
-        final rawFg = cellIdx < frame.fgColors.length ? frame.fgColors[cellIdx] : 0;
-        final rawBg = cellIdx < frame.bgColors.length ? frame.bgColors[cellIdx] : 0;
+        final rawFg = cellIdx < frame.fgColors.length
+            ? frame.fgColors[cellIdx]
+            : 0;
+        final rawBg = cellIdx < frame.bgColors.length
+            ? frame.bgColors[cellIdx]
+            : 0;
         final flag = cellIdx < frame.flags.length ? frame.flags[cellIdx] : 0;
 
-        final isInverse = (flag & 16) != 0; // bit 4: INVERSE
+        final isInverse = (flag & 16) != 0; // bit 4: INVERSE (swap fg and bg)
         final resolvedFg = _resolveCellColor(rawFg, textColor);
         final resolvedBg = _resolveCellColor(rawBg, backgroundColor);
         final effectiveBg = isInverse ? resolvedFg : resolvedBg;
@@ -96,7 +98,7 @@ class TerminalPainter extends CustomPainter {
             currentBg = effectiveBg;
             spanStartCol = col;
           } else if (currentBg != effectiveBg) {
-            // Flush previous span
+            // Flush previous background span
             final bgPaint = Paint()..color = currentBg;
             canvas.drawRect(
               Rect.fromLTWH(
@@ -112,6 +114,7 @@ class TerminalPainter extends CustomPainter {
           }
         } else {
           if (currentBg != null) {
+            // Flush open span when hitting default background
             final bgPaint = Paint()..color = currentBg;
             canvas.drawRect(
               Rect.fromLTWH(
@@ -127,6 +130,7 @@ class TerminalPainter extends CustomPainter {
         }
       }
 
+      // Flush trailing background span at end of row
       if (currentBg != null) {
         final bgPaint = Paint()..color = currentBg;
         canvas.drawRect(
@@ -160,7 +164,9 @@ class TerminalPainter extends CustomPainter {
       for (int y = a.row; y <= b.row; y++) {
         if (y < 0 || y >= frame.rows) continue;
         final startCol = (y == a.row) ? a.col.clamp(0, frame.cols - 1) : 0;
-        final endCol = (y == b.row) ? b.col.clamp(0, frame.cols - 1) : frame.cols - 1;
+        final endCol = (y == b.row)
+            ? b.col.clamp(0, frame.cols - 1)
+            : frame.cols - 1;
         canvas.drawRect(
           Rect.fromLTWH(
             startCol * cellWidth,
@@ -186,22 +192,27 @@ class TerminalPainter extends CustomPainter {
       while (col < frame.cols && charIdx < chars.length) {
         final cellIdx = y * frame.cols + col;
         final flag = cellIdx < frame.flags.length ? frame.flags[cellIdx] : 0;
-        final rawFg = cellIdx < frame.fgColors.length ? frame.fgColors[cellIdx] : 0;
-        final rawBg = cellIdx < frame.bgColors.length ? frame.bgColors[cellIdx] : 0;
+        final rawFg = cellIdx < frame.fgColors.length
+            ? frame.fgColors[cellIdx]
+            : 0;
+        final rawBg = cellIdx < frame.bgColors.length
+            ? frame.bgColors[cellIdx]
+            : 0;
 
         // Skip wide char spacer
-        if ((flag & 512) != 0) { // bit 9: WIDE_CHAR_SPACER
+        if ((flag & 512) != 0) {
+          // bit 9: WIDE_CHAR_SPACER
           col++;
           continue;
         }
 
-        final isBold = (flag & 1) != 0;          // bit 0: BOLD
-        final isItalic = (flag & 2) != 0;        // bit 1: ITALIC
-        final isUnderline = (flag & 4) != 0;     // bit 2: UNDERLINE
-        final isDim = (flag & 8) != 0;           // bit 3: DIM
-        final isInverse = (flag & 16) != 0;      // bit 4: INVERSE
-        final isStrikethrough = (flag & 32) != 0;// bit 5: STRIKEOUT
-        final isHidden = (flag & 64) != 0;       // bit 6: HIDDEN
+        final isBold = (flag & 1) != 0; // bit 0: BOLD
+        final isItalic = (flag & 2) != 0; // bit 1: ITALIC
+        final isUnderline = (flag & 4) != 0; // bit 2: UNDERLINE
+        final isDim = (flag & 8) != 0; // bit 3: DIM
+        final isInverse = (flag & 16) != 0; // bit 4: INVERSE
+        final isStrikethrough = (flag & 32) != 0; // bit 5: STRIKEOUT
+        final isHidden = (flag & 64) != 0; // bit 6: HIDDEN
 
         final resolvedFg = _resolveCellColor(rawFg, textColor);
         final resolvedBg = _resolveCellColor(rawBg, backgroundColor);
@@ -213,8 +224,12 @@ class TerminalPainter extends CustomPainter {
         while (col < frame.cols && charIdx < chars.length) {
           final cIdx = y * frame.cols + col;
           final cFlag = cIdx < frame.flags.length ? frame.flags[cIdx] : 0;
-          final cRawFg = cIdx < frame.fgColors.length ? frame.fgColors[cIdx] : 0;
-          final cRawBg = cIdx < frame.bgColors.length ? frame.bgColors[cIdx] : 0;
+          final cRawFg = cIdx < frame.fgColors.length
+              ? frame.fgColors[cIdx]
+              : 0;
+          final cRawBg = cIdx < frame.bgColors.length
+              ? frame.bgColors[cIdx]
+              : 0;
 
           if ((cFlag & 512) != 0) {
             break;
@@ -264,8 +279,8 @@ class TerminalPainter extends CustomPainter {
               decoration: isUnderline
                   ? TextDecoration.underline
                   : (isStrikethrough
-                      ? TextDecoration.lineThrough
-                      : TextDecoration.none),
+                        ? TextDecoration.lineThrough
+                        : TextDecoration.none),
               height: 1.2,
             );
 
@@ -281,9 +296,11 @@ class TerminalPainter extends CustomPainter {
               ..addText(runText);
 
             final paragraph = pb.build()
-              ..layout(ui.ParagraphConstraints(
-                width: (col - startCol) * cellWidth + 4.0,
-              ));
+              ..layout(
+                ui.ParagraphConstraints(
+                  width: (col - startCol) * cellWidth + 4.0,
+                ),
+              );
 
             canvas.drawParagraph(
               paragraph,
@@ -321,15 +338,16 @@ class TerminalPainter extends CustomPainter {
               height: 1.2,
             );
 
-            final cursorPb = ui.ParagraphBuilder(
-              ui.ParagraphStyle(
-                fontSize: fontSize,
-                fontFamily: fontFamily,
-                height: 1.2,
-              ),
-            )
-              ..pushStyle(cursorCharStyle)
-              ..addText(charUnderCursor);
+            final cursorPb =
+                ui.ParagraphBuilder(
+                    ui.ParagraphStyle(
+                      fontSize: fontSize,
+                      fontFamily: fontFamily,
+                      height: 1.2,
+                    ),
+                  )
+                  ..pushStyle(cursorCharStyle)
+                  ..addText(charUnderCursor);
 
             final cursorParagraph = cursorPb.build()
               ..layout(ui.ParagraphConstraints(width: cellWidth * 2));

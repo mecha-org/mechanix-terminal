@@ -47,12 +47,14 @@ class _TerminalSettingsPageState extends State<TerminalSettingsPage> {
     _themeName = _detectTheme();
   }
 
+  /// Parses a hex color string
   int? _parseColorToInt(String? hexString) {
     if (hexString == null) return null;
     final clean = hexString.replaceFirst('#', '');
     return int.tryParse(clean, radix: 16);
   }
 
+  /// Identifies the active theme name by comparing current background and foreground colors.
   String _detectTheme() {
     for (final t in terminalThemes) {
       if (t.bg == _colorBg && t.fg == _colorFg) return t.name;
@@ -60,6 +62,7 @@ class _TerminalSettingsPageState extends State<TerminalSettingsPage> {
     return 'custom';
   }
 
+  /// Applies a preset terminal color theme
   void _applyTheme(TermTheme t) {
     setState(() {
       _themeName = t.name;
@@ -70,6 +73,7 @@ class _TerminalSettingsPageState extends State<TerminalSettingsPage> {
     });
   }
 
+  /// Saves modified terminal preferences and notifies parent listeners.
   void _applySettings() {
     final updated = AppSettings(
       id: widget.settings.id,

@@ -38,6 +38,7 @@ class _TerminalTabsState extends State<TerminalTabs>
     super.dispose();
   }
 
+  /// Spawns a new terminal session in the Rust backend and activates a new tab.
   void _addTab() {
     setState(() {
       final id = addTerminal(rows: 24, cols: 80);
@@ -54,6 +55,8 @@ class _TerminalTabsState extends State<TerminalTabs>
     });
   }
 
+  /// Closes the specified terminal session, reaps its child process in Rust,
+  /// and adjusts the active tab index. If all tabs are closed, exits the app.
   void _removeTab(int id) {
     setState(() {
       final indexToRemove = _terminalIds.indexOf(id);
@@ -64,9 +67,11 @@ class _TerminalTabsState extends State<TerminalTabs>
           ? _terminalIds[_tabController!.index]
           : null;
 
+      // Drop terminal session in Rust
       removeTerminal(id: id);
       _terminalIds.remove(id);
 
+      // If last tab is closed, exit the application cleanly
       if (_terminalIds.isEmpty) {
         _tabController?.dispose();
         _tabController = null;
