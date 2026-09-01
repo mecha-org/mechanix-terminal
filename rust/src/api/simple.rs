@@ -86,7 +86,7 @@ pub fn create_terminal_stream(sink: StreamSink<u32>) {
         {
             let lock = terminals().read();
             for (&id, terminal) in lock.iter() {
-                if terminal.dirty.load(Ordering::SeqCst) {
+                if terminal.dirty.load(Ordering::SeqCst) || terminal.is_closed.load(Ordering::SeqCst) {
                     let _ = sink.add(id);
                 }
             }

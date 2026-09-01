@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mechanix_terminal/features/data/settings.dart';
 import 'package:mechanix_terminal/features/screen/settings_screen.dart';
 import 'package:mechanix_terminal/features/widgets/terminal_view.dart';
@@ -40,35 +41,44 @@ class _TerminalTabsState extends State<TerminalTabs>
   void _addTab() {
     setState(() {
       final id = addTerminal(rows: 24, cols: 80);
-      _terminalIds.add(id);
+      if (id != 0) {
+        _terminalIds.add(id);
 
-      _tabController?.dispose();
-      _tabController = TabController(
-        length: _terminalIds.length,
-        vsync: this,
-        initialIndex: _terminalIds.length - 1,
-      );
+        _tabController?.dispose();
+        _tabController = TabController(
+          length: _terminalIds.length,
+          vsync: this,
+          initialIndex: _terminalIds.length - 1,
+        );
+      }
     });
   }
 
   void _removeTab(int id) {
     setState(() {
       final indexToRemove = _terminalIds.indexOf(id);
-      final activeId = _terminalIds[_tabController!.index];
+      if (indexToRemove == -1) return;
+
+      final activeId = _tabController != null &&
+              _tabController!.index < _terminalIds.length
+          ? _terminalIds[_tabController!.index]
+          : null;
 
       removeTerminal(id: id);
       _terminalIds.remove(id);
 
       if (_terminalIds.isEmpty) {
-        _addTab();
+        _tabController?.dispose();
+        _tabController = null;
+        SystemNavigator.pop();
         return;
       }
 
       // If active tab still exists, find its shifted index;
       // otherwise clamp to stay within valid tab bounds.
-      final newIndex = activeId == id
+      final newIndex = (activeId == id || activeId == null)
           ? indexToRemove.clamp(0, _terminalIds.length - 1)
-          : _terminalIds.indexOf(activeId);
+          : _terminalIds.indexOf(activeId).clamp(0, _terminalIds.length - 1);
 
       _tabController?.dispose();
       _tabController = TabController(
@@ -82,7 +92,7 @@ class _TerminalTabsState extends State<TerminalTabs>
   @override
   Widget build(BuildContext context) {
     if (_terminalIds.isEmpty) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(body: SizedBox.shrink());
     }
 
     final buttonStyle = ButtonStyle(
@@ -179,6 +189,7 @@ class _TerminalTabsState extends State<TerminalTabs>
             tabController: _tabController!,
             index: entry.key,
             terminalStream: widget.terminalStream,
+            onClosed: () => _removeTab(entry.value),
           );
         }).toList(),
       ),

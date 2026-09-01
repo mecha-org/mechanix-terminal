@@ -16,6 +16,7 @@ class TerminalView extends StatefulWidget {
   final TabController tabController;
   final int index;
   final Stream<int>? terminalStream;
+  final VoidCallback? onClosed;
 
   const TerminalView({
     super.key,
@@ -24,6 +25,7 @@ class TerminalView extends StatefulWidget {
     required this.tabController,
     required this.index,
     this.terminalStream,
+    this.onClosed,
   });
 
   @override
@@ -58,6 +60,10 @@ class _TerminalViewState extends State<TerminalView>
       if (id == widget.terminalId && mounted) {
         final newFrame = getTerminalFrame(id: widget.terminalId);
         if (newFrame != null) {
+          if (newFrame.isClosed) {
+            widget.onClosed?.call();
+            return;
+          }
           setState(() {
             _frame = newFrame;
           });
@@ -65,6 +71,13 @@ class _TerminalViewState extends State<TerminalView>
       }
     });
     _frame = getTerminalFrame(id: widget.terminalId);
+    if (_frame?.isClosed == true) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          widget.onClosed?.call();
+        }
+      });
+    }
   }
 
   @override
@@ -85,6 +98,10 @@ class _TerminalViewState extends State<TerminalView>
         if (id == widget.terminalId && mounted) {
           final newFrame = getTerminalFrame(id: widget.terminalId);
           if (newFrame != null) {
+            if (newFrame.isClosed) {
+              widget.onClosed?.call();
+              return;
+            }
             setState(() {
               _frame = newFrame;
             });
@@ -92,6 +109,13 @@ class _TerminalViewState extends State<TerminalView>
         }
       });
       _frame = getTerminalFrame(id: widget.terminalId);
+      if (_frame?.isClosed == true) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            widget.onClosed?.call();
+          }
+        });
+      }
     }
   }
 

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechanix_terminal/features/data/settings.dart';
+import 'package:mechanix_terminal/features/screen/terminal_tabs_screen.dart';
 import 'package:mechanix_terminal/features/widgets/terminal_painter.dart';
 import 'package:mechanix_terminal/features/widgets/terminal_view.dart';
 import 'package:mechanix_terminal/src/rust/frb_generated.dart';
@@ -11,9 +12,17 @@ import 'package:mechanix_terminal/src/rust/terminal.dart';
 class MockRustLibApi implements RustLibApi {
   final StreamController<int> streamController = StreamController<int>.broadcast();
   TerminalFrame? currentFrame;
+  final Map<int, TerminalFrame> frames = {};
+  int _nextId = 1;
 
   @override
-  int crateApiSimpleAddTerminal({required int rows, required int cols, String? cwd}) => 1;
+  int crateApiSimpleAddTerminal({required int rows, required int cols, String? cwd}) {
+    final id = _nextId++;
+    if (currentFrame != null) {
+      frames[id] = currentFrame!;
+    }
+    return id;
+  }
 
   @override
   Stream<int> crateApiSimpleCreateTerminalStream() => streamController.stream;
@@ -22,7 +31,7 @@ class MockRustLibApi implements RustLibApi {
   String? crateApiSimpleGetTerminalCwd({required int id}) => '/home/test';
 
   @override
-  TerminalFrame? crateApiSimpleGetTerminalFrame({required int id}) => currentFrame;
+  TerminalFrame? crateApiSimpleGetTerminalFrame({required int id}) => frames[id] ?? currentFrame;
 
   @override
   Future<void> crateApiSimpleInitApp() async {}
@@ -275,6 +284,132 @@ void main() {
 
       expect(find.byType(TerminalView), findsOneWidget);
       expect(find.byType(CustomPaint), findsWidgets);
+    });
+
+    testWidgets('TerminalView invokes onClosed when terminalStream emits closed terminal', (
+      WidgetTester tester,
+    ) async {
+      final settings = AppSettings(
+        fontSize: 14.0,
+        fontFamily: 'monospace',
+      );
+      final tabController = TabController(length: 1, vsync: const TestVSync());
+
+      mockApi.currentFrame = TerminalFrame(
+        rows: 10,
+        cols: 20,
+        lines: List.generate(10, (i) => 'Line $i              '),
+        fgColors: Uint32List(200),
+        bgColors: Uint32List(200),
+        flags: Uint16List(200),
+        cursorX: 0,
+        cursorY: 0,
+        isClosed: false,
+      );
+
+      bool closedCalled = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 500,
+              height: 400,
+              child: TerminalView(
+                terminalId: 1,
+                settings: settings,
+                tabController: tabController,
+                index: 0,
+                terminalStream: mockApi.streamController.stream,
+                onClosed: () {
+                  closedCalled = true;
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(closedCalled, isFalse);
+
+      // Now simulate terminal process exit
+      mockApi.currentFrame = TerminalFrame(
+        rows: 10,
+        cols: 20,
+        lines: List.generate(10, (i) => 'Line $i              '),
+        fgColors: Uint32List(200),
+        bgColors: Uint32List(200),
+        flags: Uint16List(200),
+        cursorX: 0,
+        cursorY: 0,
+        isClosed: true,
+      );
+
+      mockApi.streamController.add(1);
+      await tester.pump();
+
+      expect(closedCalled, isTrue);
+    });
+
+    testWidgets('TerminalTabs removes tab when terminal process terminates', (
+      WidgetTester tester,
+    ) async {
+      final settings = AppSettings(
+        fontSize: 14.0,
+        fontFamily: 'monospace',
+      );
+
+      mockApi.currentFrame = TerminalFrame(
+        rows: 10,
+        cols: 20,
+        lines: List.generate(10, (i) => 'Line $i              '),
+        fgColors: Uint32List(200),
+        bgColors: Uint32List(200),
+        flags: Uint16List(200),
+        cursorX: 0,
+        cursorY: 0,
+        isClosed: false,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TerminalTabs(
+            settings: settings,
+            onSettingsChanged: (_) {},
+            terminalStream: mockApi.streamController.stream,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Tab 1'), findsOneWidget);
+
+      // Add a second tab
+      await tester.tap(find.byIcon(Icons.add));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Tab 1'), findsOneWidget);
+      expect(find.text('Tab 2'), findsOneWidget);
+
+      // Now close Tab 2 via shell exit simulation
+      mockApi.frames[2] = TerminalFrame(
+        rows: 10,
+        cols: 20,
+        lines: List.generate(10, (i) => 'Line $i              '),
+        fgColors: Uint32List(200),
+        bgColors: Uint32List(200),
+        flags: Uint16List(200),
+        cursorX: 0,
+        cursorY: 0,
+        isClosed: true,
+      );
+
+      mockApi.streamController.add(2);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Tab 1'), findsOneWidget);
+      expect(find.text('Tab 2'), findsNothing);
     });
   });
 }

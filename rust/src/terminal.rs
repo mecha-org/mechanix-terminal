@@ -266,7 +266,8 @@ impl FlutterTerminal {
     }
 
     pub fn get_frame(&self) -> Option<TerminalFrame> {
-        if !self.dirty.swap(false, Ordering::SeqCst) {
+        let is_closed = self.is_closed.load(Ordering::SeqCst);
+        if !self.dirty.swap(false, Ordering::SeqCst) && !is_closed {
             return None;
         }
 
@@ -441,5 +442,30 @@ mod tests {
             assert_eq!(f.bg_colors.len(), 24 * 80);
             assert_eq!(f.flags.len(), 24 * 80);
         }
+    }
+
+    #[test]
+    fn test_terminal_exit_command() {
+        let term = FlutterTerminal::new(24, 80, None).expect("Terminal should create");
+        assert!(!term.is_closed.load(Ordering::SeqCst));
+
+        // Write exit command to the shell process
+        term.write("exit\n".to_string());
+
+        // Wait up to 1 second for the shell process to terminate and trigger EOF on reader
+        let mut closed = false;
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(20));
+            if term.is_closed.load(Ordering::SeqCst) {
+                closed = true;
+                break;
+            }
+        }
+        assert!(closed, "Terminal should be marked is_closed after shell exits");
+
+        // get_frame should return a frame with is_closed == true
+        let frame = term.get_frame();
+        assert!(frame.is_some());
+        assert!(frame.unwrap().is_closed);
     }
 }
