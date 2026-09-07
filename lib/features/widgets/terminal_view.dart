@@ -50,6 +50,7 @@ class _TerminalViewState extends State<TerminalView>
   @override
   void initState() {
     super.initState();
+    _focusNode.addListener(_handleFocusChange);
     widget.tabController.addListener(_handleTabChange);
 
     if (widget.tabController.index == widget.index) {
@@ -121,10 +122,17 @@ class _TerminalViewState extends State<TerminalView>
 
   @override
   void dispose() {
+    _focusNode.removeListener(_handleFocusChange);
     widget.tabController.removeListener(_handleTabChange);
     _subscription?.cancel();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _handleFocusChange() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _handleTabChange() {
@@ -245,7 +253,9 @@ class _TerminalViewState extends State<TerminalView>
       final chars = line.characters.toList();
 
       final startCol = (y == a.row) ? a.col.clamp(0, frame.cols - 1) : 0;
-      final endCol = (y == b.row) ? b.col.clamp(0, frame.cols - 1) : frame.cols - 1;
+      final endCol = (y == b.row)
+          ? b.col.clamp(0, frame.cols - 1)
+          : frame.cols - 1;
 
       bool isWrapped = false;
       if (y < b.row) {
@@ -287,12 +297,12 @@ class _TerminalViewState extends State<TerminalView>
       fontFamily: fontFamily,
       fontFamilyFallback: const ['monospace'],
       fontSize: fontSize,
-      height: 1.2,
+      height: 1.0,
     );
     final measureParaStyle = ui.ParagraphStyle(
       fontSize: fontSize,
       fontFamily: fontFamily,
-      height: 1.2,
+      height: 1.0,
     );
     final measurePb = ui.ParagraphBuilder(measureParaStyle)
       ..pushStyle(measureStyle)
@@ -313,10 +323,14 @@ class _TerminalViewState extends State<TerminalView>
         final gridWidth = cols * charWidth;
         final gridHeight = rows * charHeight;
 
-        final horizontalPadding =
-            ((availableWidth - gridWidth) / 2.0).clamp(0.0, double.infinity);
-        final verticalPadding =
-            ((availableHeight - gridHeight) / 2.0).clamp(0.0, double.infinity);
+        final horizontalPadding = ((availableWidth - gridWidth) / 2.0).clamp(
+          0.0,
+          double.infinity,
+        );
+        final verticalPadding = ((availableHeight - gridHeight) / 2.0).clamp(
+          0.0,
+          double.infinity,
+        );
 
         final currentFrame = _frame;
         if (currentFrame == null ||
@@ -346,7 +360,8 @@ class _TerminalViewState extends State<TerminalView>
               // Negate the dy to match Alacritty's scroll direction:
               // Flutter: dy < 0 is wheel UP, dy > 0 is wheel DOWN
               // Alacritty: positive delta scrolls UP (into history), negative delta scrolls DOWN
-              final int lines = (-pointerSignal.scrollDelta.dy / charHeight).round();
+              final int lines = (-pointerSignal.scrollDelta.dy / charHeight)
+                  .round();
               if (lines != 0) {
                 scrollTerminal(id: widget.terminalId, lines: lines);
               }
@@ -354,7 +369,8 @@ class _TerminalViewState extends State<TerminalView>
           },
           // ── Left-button down: start selection ─────────────────────────────────
           onPointerDown: (event) {
-            final isPrimary = event.buttons == kPrimaryMouseButton ||
+            final isPrimary =
+                event.buttons == kPrimaryMouseButton ||
                 event.kind == PointerDeviceKind.touch;
             if (isPrimary) {
               if (!_focusNode.hasFocus) {
@@ -376,7 +392,8 @@ class _TerminalViewState extends State<TerminalView>
           },
           // ── Left-button drag: extend selection ────────────────────────────────
           onPointerMove: (event) {
-            final isPrimary = event.buttons == kPrimaryMouseButton ||
+            final isPrimary =
+                event.buttons == kPrimaryMouseButton ||
                 event.kind == PointerDeviceKind.touch;
             if (_isSelecting && isPrimary) {
               final cell = _pixelToCell(
@@ -394,7 +411,8 @@ class _TerminalViewState extends State<TerminalView>
           // ── Left-button up: finish & copy ─────────────────────────────────────
           onPointerUp: (event) {
             if (_isSelecting) {
-              final isSingleTap = _selectionStart != null &&
+              final isSingleTap =
+                  _selectionStart != null &&
                   _selectionEnd != null &&
                   _selectionStart!.col == _selectionEnd!.col &&
                   _selectionStart!.row == _selectionEnd!.row;
@@ -547,7 +565,9 @@ class _TerminalViewState extends State<TerminalView>
                               charWidth,
                               charHeight,
                               _parseHexColor(widget.settings.colorForeground) ??
-                                  Theme.of(context).textTheme.bodyMedium?.color ??
+                                  Theme.of(
+                                    context,
+                                  ).textTheme.bodyMedium?.color ??
                                   Colors.white,
                               _parseHexColor(widget.settings.colorBackground) ??
                                   Theme.of(context).scaffoldBackgroundColor,
@@ -558,6 +578,7 @@ class _TerminalViewState extends State<TerminalView>
                               colorPalette: activeTheme.palette,
                               selectionStart: _selectionStart,
                               selectionEnd: _selectionEnd,
+                              isFocused: _focusNode.hasFocus,
                             )
                           : null,
                       child: Container(),

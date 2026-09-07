@@ -22,7 +22,23 @@ const List<int> _defaultColorPalette = [
   0xEEEEEC, // 15: Bright White
 ];
 
-/// Custom painter that renders a terminal frame to the canvas with batched drawing optimizations.
+const List<String> _defaultFontFamilyFallback = ['monospace'];
+
+class _CachedRun {
+  final ui.Paragraph paragraph;
+  final double x;
+
+  const _CachedRun(this.paragraph, this.x);
+}
+
+class _CachedRow {
+  final List<_CachedRun> runs;
+
+  const _CachedRow(this.runs);
+}
+
+/// Custom painter that renders a terminal frame to the canvas with batched drawing optimizations
+/// and per-row paragraph caching.
 class TerminalPainter extends CustomPainter {
   final TerminalFrame frame;
   final double fontSize;
@@ -36,6 +52,19 @@ class TerminalPainter extends CustomPainter {
   final Uint32List? colorPalette;
   final ({int col, int row})? selectionStart;
   final ({int col, int row})? selectionEnd;
+  final bool isFocused;
+
+  static const int _maxCachedRows = 512;
+  static final Map<String, _CachedRow> _rowCache = {};
+
+  /// Clears the static row cache. Useful for testing or when disposing terminal instances.
+  static void clearCache() {
+    _rowCache.clear();
+  }
+
+  /// Current number of rows cached in memory (for testing and metrics).
+  @visibleForTesting
+  static int get cachedRowCount => _rowCache.length;
 
   TerminalPainter(
     this.frame,
@@ -50,26 +79,53 @@ class TerminalPainter extends CustomPainter {
     this.colorPalette,
     this.selectionStart,
     this.selectionEnd,
+    this.isFocused = true,
   });
 
-  /// Resolves an encoded color integer to a concrete Flutter Color.
-  Color _resolveCellColor(int colorCode, Color defaultColor) {
+  /// Fast color resolution reusing the pre-resolved 16-color ANSI palette
+  /// to eliminate object allocation churn on every frame.
+  static Color _resolveCellColor(
+    int colorCode,
+    Color defaultColor,
+    List<Color> palette,
+  ) {
     if (colorCode == 0) {
       return defaultColor;
     }
     if ((colorCode & 0xFF000000) == 0x01000000) {
       final idx = colorCode & 0x0F;
-      if (colorPalette != null && idx < colorPalette!.length) {
-        return Color(0xFF000000 | colorPalette![idx]);
-      }
-      return Color(0xFF000000 | _defaultColorPalette[idx]);
+      return palette[idx];
     }
     return Color(colorCode);
+  }
+
+  /// Fast row attributes hash to detect changes in colors or formatting flags.
+  int _computeRowAttrHash(int y) {
+    int hash = 17;
+    final rowStart = y * frame.cols;
+    final rowEnd = rowStart + frame.cols;
+    for (int i = rowStart; i < rowEnd; i++) {
+      final f = i < frame.flags.length ? frame.flags[i] : 0;
+      final fg = i < frame.fgColors.length ? frame.fgColors[i] : 0;
+      final bg = i < frame.bgColors.length ? frame.bgColors[i] : 0;
+      hash = 31 * hash + f;
+      hash = 31 * hash + fg;
+      hash = 31 * hash + bg;
+    }
+    return hash;
   }
 
   @override
   void paint(Canvas canvas, Size size) {
     final defaultBgValue = backgroundColor.toARGB32();
+
+    // Pre-resolve the 16-color ANSI palette once per frame to eliminate object allocation churn
+    final resolvedPalette = List<Color>.generate(16, (idx) {
+      if (colorPalette != null && idx < colorPalette!.length) {
+        return Color(0xFF000000 | colorPalette![idx]);
+      }
+      return Color(0xFF000000 | _defaultColorPalette[idx]);
+    });
 
     // ── 1. Draw Cell Backgrounds ───────────────────────────────────────────
     for (int y = 0; y < frame.rows; y++) {
@@ -87,8 +143,12 @@ class TerminalPainter extends CustomPainter {
         final flag = cellIdx < frame.flags.length ? frame.flags[cellIdx] : 0;
 
         final isInverse = (flag & 16) != 0; // bit 4: INVERSE (swap fg and bg)
-        final resolvedFg = _resolveCellColor(rawFg, textColor);
-        final resolvedBg = _resolveCellColor(rawBg, backgroundColor);
+        final resolvedFg = _resolveCellColor(rawFg, textColor, resolvedPalette);
+        final resolvedBg = _resolveCellColor(
+          rawBg,
+          backgroundColor,
+          resolvedPalette,
+        );
         final effectiveBg = isInverse ? resolvedFg : resolvedBg;
 
         final isCustomBg = effectiveBg.toARGB32() != defaultBgValue;
@@ -179,15 +239,30 @@ class TerminalPainter extends CustomPainter {
       }
     }
 
-    // ── 3. Draw Text Runs (Per-Cell Styled) ──────────────────────────────────
+    // ── 3. Draw Text Runs (Per-Cell Styled with Row Caching)
+    final int paletteHash = colorPalette != null ? colorPalette.hashCode : 0;
+
     for (int y = 0; y < frame.rows; y++) {
       if (y >= frame.lines.length) break;
       final line = frame.lines[y];
       if (line.isEmpty) continue;
 
+      final attrHash = _computeRowAttrHash(y);
+      final cacheKey =
+          "${terminalId}_${fontSize}_${cellWidth}_${textColor.toARGB32()}_${backgroundColor.toARGB32()}_${fontFamily}_${paletteHash}_${line.hashCode}_$attrHash";
+
+      final cachedRow = _rowCache[cacheKey];
+      if (cachedRow != null) {
+        for (final run in cachedRow.runs) {
+          canvas.drawParagraph(run.paragraph, Offset(run.x, y * cellHeight));
+        }
+        continue;
+      }
+
       final chars = line.characters.toList();
       int col = 0;
       int charIdx = 0;
+      final rowRuns = <_CachedRun>[];
 
       while (col < frame.cols && charIdx < chars.length) {
         final cellIdx = y * frame.cols + col;
@@ -214,8 +289,12 @@ class TerminalPainter extends CustomPainter {
         final isStrikethrough = (flag & 32) != 0; // bit 5: STRIKEOUT
         final isHidden = (flag & 64) != 0; // bit 6: HIDDEN
 
-        final resolvedFg = _resolveCellColor(rawFg, textColor);
-        final resolvedBg = _resolveCellColor(rawBg, backgroundColor);
+        final resolvedFg = _resolveCellColor(rawFg, textColor, resolvedPalette);
+        final resolvedBg = _resolveCellColor(
+          rawBg,
+          backgroundColor,
+          resolvedPalette,
+        );
         final effectiveFg = isInverse ? resolvedBg : resolvedFg;
 
         final startCol = col;
@@ -243,8 +322,16 @@ class TerminalPainter extends CustomPainter {
           final cStrike = (cFlag & 32) != 0;
           final cHidden = (cFlag & 64) != 0;
 
-          final cResolvedFg = _resolveCellColor(cRawFg, textColor);
-          final cResolvedBg = _resolveCellColor(cRawBg, backgroundColor);
+          final cResolvedFg = _resolveCellColor(
+            cRawFg,
+            textColor,
+            resolvedPalette,
+          );
+          final cResolvedBg = _resolveCellColor(
+            cRawBg,
+            backgroundColor,
+            resolvedPalette,
+          );
           final cEffectiveFg = cInverse ? cResolvedBg : cResolvedFg;
 
           if (cEffectiveFg == effectiveFg &&
@@ -272,7 +359,7 @@ class TerminalPainter extends CustomPainter {
             final textStyle = ui.TextStyle(
               color: runColor,
               fontFamily: fontFamily,
-              fontFamilyFallback: const ['monospace'],
+              fontFamilyFallback: _defaultFontFamilyFallback,
               fontSize: fontSize,
               fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
               fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
@@ -281,14 +368,14 @@ class TerminalPainter extends CustomPainter {
                   : (isStrikethrough
                         ? TextDecoration.lineThrough
                         : TextDecoration.none),
-              height: 1.2,
+              height: 1.0,
             );
 
             final paragraphStyle = ui.ParagraphStyle(
               textAlign: TextAlign.left,
               fontSize: fontSize,
               fontFamily: fontFamily,
-              height: 1.2,
+              height: 1.0,
             );
 
             final pb = ui.ParagraphBuilder(paragraphStyle)
@@ -302,13 +389,34 @@ class TerminalPainter extends CustomPainter {
                 ),
               );
 
-            canvas.drawParagraph(
-              paragraph,
-              Offset(startCol * cellWidth, y * cellHeight),
-            );
+            final runX = startCol * cellWidth;
+            rowRuns.add(_CachedRun(paragraph, runX));
+            canvas.drawParagraph(paragraph, Offset(runX, y * cellHeight));
           }
         }
       }
+
+      assert(
+        () {
+          int nonSpacerCols = 0;
+          final rowStart = y * frame.cols;
+          for (int c = 0; c < frame.cols; c++) {
+            final f = (rowStart + c < frame.flags.length)
+                ? frame.flags[rowStart + c]
+                : 0;
+            if ((f & 512) == 0) {
+              nonSpacerCols++;
+            }
+          }
+          return charIdx == chars.length && charIdx == nonSpacerCols;
+        }(),
+        'Contract violation with Rust backend at row $y: parsed $charIdx graphemes for ${chars.length} characters in line "${frame.lines[y]}".',
+      );
+
+      if (_rowCache.length >= _maxCachedRows) {
+        _rowCache.remove(_rowCache.keys.first);
+      }
+      _rowCache[cacheKey] = _CachedRow(rowRuns);
     }
 
     // ── 4. Draw Cursor ───────────────────────────────────────────────────────
@@ -320,44 +428,79 @@ class TerminalPainter extends CustomPainter {
         cellHeight,
       );
 
-      final cursorPaint = Paint()..color = cursorColor;
-      canvas.drawRect(cursorRect, cursorPaint);
+      if (isFocused) {
+        final cursorPaint = Paint()..color = cursorColor;
+        canvas.drawRect(cursorRect, cursorPaint);
 
-      // Render character under cursor using backgroundColor for maximum legibility
-      if (frame.cursorY < frame.lines.length) {
-        final line = frame.lines[frame.cursorY];
-        final chars = line.characters.toList();
-        if (frame.cursorX < chars.length) {
-          final charUnderCursor = chars[frame.cursorX];
-          if (charUnderCursor.trim().isNotEmpty) {
-            final cursorCharStyle = ui.TextStyle(
-              color: backgroundColor,
-              fontFamily: fontFamily,
-              fontFamilyFallback: const ['monospace'],
-              fontSize: fontSize,
-              height: 1.2,
-            );
+        // Render character under cursor using backgroundColor for maximum legibility
+        if (frame.cursorY < frame.lines.length) {
+          final line = frame.lines[frame.cursorY];
+          if (line.isNotEmpty) {
+            // Map grid column (frame.cursorX) to character index in frame.lines[frame.cursorY].
+            // Each non-spacer cell consumes exactly 1 character from line.characters.
+            int charIdx = 0;
+            final rowStart = frame.cursorY * frame.cols;
+            for (int c = 0; c < frame.cursorX; c++) {
+              final flag = (rowStart + c < frame.flags.length)
+                  ? frame.flags[rowStart + c]
+                  : 0;
+              if ((flag & 512) == 0) {
+                charIdx++;
+              }
+            }
 
-            final cursorPb =
-                ui.ParagraphBuilder(
-                    ui.ParagraphStyle(
-                      fontSize: fontSize,
-                      fontFamily: fontFamily,
-                      height: 1.2,
+            final cursorFlag = (rowStart + frame.cursorX < frame.flags.length)
+                ? frame.flags[rowStart + frame.cursorX]
+                : 0;
+            final isCursorOnSpacer = (cursorFlag & 512) != 0;
+
+            if (!isCursorOnSpacer) {
+              final chars = line.characters.toList();
+              if (charIdx < chars.length) {
+                final charUnderCursor = chars[charIdx];
+                if (charUnderCursor.trim().isNotEmpty) {
+                  final cursorCharStyle = ui.TextStyle(
+                    color: backgroundColor,
+                    fontFamily: fontFamily,
+                    fontFamilyFallback: _defaultFontFamilyFallback,
+                    fontSize: fontSize,
+                    height: 1.0,
+                  );
+
+                  final cursorPb =
+                      ui.ParagraphBuilder(
+                          ui.ParagraphStyle(
+                            fontSize: fontSize,
+                            fontFamily: fontFamily,
+                            height: 1.0,
+                          ),
+                        )
+                        ..pushStyle(cursorCharStyle)
+                        ..addText(charUnderCursor);
+
+                  final cursorParagraph = cursorPb.build()
+                    ..layout(ui.ParagraphConstraints(width: cellWidth * 2));
+
+                  canvas.drawParagraph(
+                    cursorParagraph,
+                    Offset(
+                      frame.cursorX * cellWidth,
+                      frame.cursorY * cellHeight,
                     ),
-                  )
-                  ..pushStyle(cursorCharStyle)
-                  ..addText(charUnderCursor);
-
-            final cursorParagraph = cursorPb.build()
-              ..layout(ui.ParagraphConstraints(width: cellWidth * 2));
-
-            canvas.drawParagraph(
-              cursorParagraph,
-              Offset(frame.cursorX * cellWidth, frame.cursorY * cellHeight),
-            );
+                  );
+                }
+              }
+            }
           }
         }
+      } else {
+        // Hollow rectangular outline when unfocused (matching native Alacritty)
+        final cursorPaint = Paint()
+          ..color = cursorColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0;
+        canvas.drawRect(cursorRect.deflate(0.5), cursorPaint);
+        // In unfocused state, character under cursor is already drawn in the text pass!
       }
     }
   }
@@ -374,6 +517,7 @@ class TerminalPainter extends CustomPainter {
         oldDelegate.fontFamily != fontFamily ||
         oldDelegate.colorPalette != colorPalette ||
         oldDelegate.selectionStart != selectionStart ||
-        oldDelegate.selectionEnd != selectionEnd;
+        oldDelegate.selectionEnd != selectionEnd ||
+        oldDelegate.isFocused != isFocused;
   }
 }

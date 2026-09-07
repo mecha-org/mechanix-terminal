@@ -393,13 +393,23 @@ mod tests {
         assert_eq!(resolve_color(Color::Named(NamedColor::Background)), 0);
         assert_eq!(resolve_color(Color::Named(NamedColor::Black)), 0x01000000);
         assert_eq!(resolve_color(Color::Named(NamedColor::Red)), 0x01000001);
-        assert_eq!(resolve_color(Color::Named(NamedColor::BrightWhite)), 0x0100000F);
+        assert_eq!(
+            resolve_color(Color::Named(NamedColor::BrightWhite)),
+            0x0100000F
+        );
     }
 
     #[test]
     fn test_color_resolution_truecolor() {
-        let rgb_color = Color::Spec(Rgb { r: 255, g: 128, b: 64 });
-        assert_eq!(resolve_color(rgb_color), 0xFF000000 | (255 << 16) | (128 << 8) | 64);
+        let rgb_color = Color::Spec(Rgb {
+            r: 255,
+            g: 128,
+            b: 64,
+        });
+        assert_eq!(
+            resolve_color(rgb_color),
+            0xFF000000 | (255 << 16) | (128 << 8) | 64
+        );
     }
 
     #[test]
@@ -461,7 +471,10 @@ mod tests {
                 break;
             }
         }
-        assert!(closed, "Terminal should be marked is_closed after shell exits");
+        assert!(
+            closed,
+            "Terminal should be marked is_closed after shell exits"
+        );
 
         // get_frame should return a frame with is_closed == true
         let frame = term.get_frame();
