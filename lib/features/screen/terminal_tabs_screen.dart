@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mechanix_terminal/features/data/settings.dart';
 import 'package:mechanix_terminal/features/screen/settings_screen.dart';
 import 'package:mechanix_terminal/features/widgets/terminal_view.dart';
@@ -37,48 +38,66 @@ class _TerminalTabsState extends State<TerminalTabs>
     super.dispose();
   }
 
+  /// Spawns a new terminal session in the Rust backend and activates a new tab.
   void _addTab() {
     setState(() {
       final id = addTerminal(rows: 24, cols: 80);
-      _terminalIds.add(id);
-
-      _tabController?.dispose();
-      _tabController = TabController(
-        length: _terminalIds.length,
-        vsync: this,
-        initialIndex: _terminalIds.length - 1,
-      );
-    });
-  }
-
-  void _removeTab(int id) {
-    setState(() {
-      final indexToRemove = _terminalIds.indexOf(id);
-      removeTerminal(id: id);
-      _terminalIds.remove(id);
-
-      if (_terminalIds.isEmpty) {
-        _addTab();
-      } else {
-        int newIndex = _tabController!.index;
-        if (indexToRemove <= newIndex) {
-          newIndex = (newIndex - 1).clamp(0, _terminalIds.length - 1);
-        }
+      if (id != 0) {
+        _terminalIds.add(id);
 
         _tabController?.dispose();
         _tabController = TabController(
           length: _terminalIds.length,
           vsync: this,
-          initialIndex: newIndex,
+          initialIndex: _terminalIds.length - 1,
         );
       }
+    });
+  }
+
+  /// Closes the specified terminal session, reaps its child process in Rust,
+  /// and adjusts the active tab index. If all tabs are closed, exits the app.
+  void _removeTab(int id) {
+    setState(() {
+      final indexToRemove = _terminalIds.indexOf(id);
+      if (indexToRemove == -1) return;
+
+      final activeId = _tabController != null &&
+              _tabController!.index < _terminalIds.length
+          ? _terminalIds[_tabController!.index]
+          : null;
+
+      // Drop terminal session in Rust
+      removeTerminal(id: id);
+      _terminalIds.remove(id);
+
+      // If last tab is closed, exit the application cleanly
+      if (_terminalIds.isEmpty) {
+        _tabController?.dispose();
+        _tabController = null;
+        SystemNavigator.pop();
+        return;
+      }
+
+      // If active tab still exists, find its shifted index;
+      // otherwise clamp to stay within valid tab bounds.
+      final newIndex = (activeId == id || activeId == null)
+          ? indexToRemove.clamp(0, _terminalIds.length - 1)
+          : _terminalIds.indexOf(activeId).clamp(0, _terminalIds.length - 1);
+
+      _tabController?.dispose();
+      _tabController = TabController(
+        length: _terminalIds.length,
+        vsync: this,
+        initialIndex: newIndex,
+      );
     });
   }
 
   @override
   Widget build(BuildContext context) {
     if (_terminalIds.isEmpty) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(body: SizedBox.shrink());
     }
 
     final buttonStyle = ButtonStyle(
@@ -99,83 +118,83 @@ class _TerminalTabsState extends State<TerminalTabs>
 
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 0,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
-          child: Row(
-            children: [
-              Expanded(
-                child: TabBar(
-                  controller: _tabController,
-                  isScrollable: true,
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 8.0),
-                  tabs: _terminalIds
-                      .asMap()
-                      .entries
-                      .map(
-                        (e) => Tab(
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const SizedBox(width: 8),
-                              Text("Tab ${e.key + 1}"),
-                              IconButton(
-                                iconSize: 16,
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(
-                                  minWidth: 44,
-                                  minHeight: 44,
-                                ),
-                                icon: const Icon(Icons.close),
-                                onPressed: () => _removeTab(e.value),
-                                tooltip: 'Close Tab',
-                              ),
-                            ],
-                          ),
+        toolbarHeight: 52,
+        titleSpacing: 0,
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 8.0),
+        title: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          labelPadding: const EdgeInsets.symmetric(horizontal: 8.0),
+          tabs: _terminalIds
+              .asMap()
+              .entries
+              .map(
+                (e) => Tab(
+                  key: ValueKey('tab_${e.value}'),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(width: 8),
+                      Text("Tab ${e.key + 1}"),
+                      IconButton(
+                        iconSize: 16,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 48,
+                          minHeight: 48,
                         ),
-                      )
-                      .toList(),
-                ),
-              ),
-              IconButton(
-                style: buttonStyle,
-                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                icon: const Icon(Icons.add),
-                onPressed: _addTab,
-                tooltip: 'Add Tab',
-              ),
-              IconButton(
-                style: buttonStyle,
-                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                icon: const Icon(Icons.settings),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      fullscreenDialog: true,
-                      builder: (_) => TerminalSettingsPage(
-                        settings: widget.settings,
-                        onSettingsChanged: widget.onSettingsChanged,
+                        icon: const Icon(Icons.close),
+                        onPressed: () => _removeTab(e.value),
+                        tooltip: 'Close Tab',
                       ),
-                    ),
-                  );
-                },
-                tooltip: 'Settings',
-              ),
-            ],
-          ),
+                    ],
+                  ),
+                ),
+              )
+              .toList(),
         ),
+        actions: [
+          IconButton(
+            style: buttonStyle,
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            icon: const Icon(Icons.add),
+            onPressed: _addTab,
+            tooltip: 'Add Tab',
+          ),
+          IconButton(
+            style: buttonStyle,
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  fullscreenDialog: true,
+                  builder: (_) => TerminalSettingsPage(
+                    settings: widget.settings,
+                    onSettingsChanged: widget.onSettingsChanged,
+                  ),
+                ),
+              );
+            },
+            tooltip: 'Settings',
+          ),
+        ],
       ),
+
       body: TabBarView(
         controller: _tabController,
         physics: const NeverScrollableScrollPhysics(),
         children: _terminalIds.asMap().entries.map((entry) {
           return TerminalView(
+            key: ValueKey('term_${entry.value}'),
             terminalId: entry.value,
             settings: widget.settings,
             tabController: _tabController!,
             index: entry.key,
             terminalStream: widget.terminalStream,
+            onClosed: () => _removeTab(entry.value),
           );
         }).toList(),
       ),
