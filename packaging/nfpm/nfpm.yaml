@@ -13,10 +13,10 @@ license: BSD
 overrides:
   rpm:
     depends:
-      - mechanix-flutter-engine = 3.47.0
+      - mechanix-flutter-engine = 3.47.1
   deb:
     depends:
-      - "mechanix-flutter-engine (= 3.47.0)"
+      - "mechanix-flutter-engine (= 3.47.1)"
 
 contents:
   - src: ./stage/bundle/mechanix_terminal
