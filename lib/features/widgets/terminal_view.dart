@@ -6,9 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mechanix_terminal/core/utils/constants.dart';
 import 'package:mechanix_terminal/features/data/settings.dart';
+import 'package:mechanix_terminal/features/data/terminal_screen.dart';
 import 'package:mechanix_terminal/features/widgets/terminal_painter.dart';
 import 'package:mechanix_terminal/src/rust/api/simple.dart';
-import 'package:mechanix_terminal/src/rust/terminal.dart';
 
 class TerminalView extends StatefulWidget {
   final int terminalId;
@@ -34,7 +34,7 @@ class TerminalView extends StatefulWidget {
 
 class _TerminalViewState extends State<TerminalView>
     with AutomaticKeepAliveClientMixin {
-  TerminalFrame? _frame;
+  TerminalScreen _screen = TerminalScreen();
   StreamSubscription? _subscription;
   final FocusNode _focusNode = FocusNode();
 
@@ -60,8 +60,16 @@ class _TerminalViewState extends State<TerminalView>
     }
 
     _subscription = widget.terminalStream?.listen(_onStreamEvent);
-    _frame = getTerminalFrame(id: widget.terminalId);
-    if (_frame?.isClosed == true) {
+    _loadFullScreen();
+  }
+
+  // A fresh view holds no rows, so ask Rust to resend the whole screen.
+  void _loadFullScreen() {
+    _screen = TerminalScreen();
+    final update = getTerminalUpdate(id: widget.terminalId, forceFull: true);
+    if (update == null) return;
+    _screen.apply(update);
+    if (update.isClosed) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           widget.onClosed?.call();
@@ -86,14 +94,7 @@ class _TerminalViewState extends State<TerminalView>
         oldWidget.terminalStream != widget.terminalStream) {
       _subscription?.cancel();
       _subscription = widget.terminalStream?.listen(_onStreamEvent);
-      _frame = getTerminalFrame(id: widget.terminalId);
-      if (_frame?.isClosed == true) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            widget.onClosed?.call();
-          }
-        });
-      }
+      _loadFullScreen();
     }
   }
 
@@ -117,31 +118,26 @@ class _TerminalViewState extends State<TerminalView>
       return;
     }
 
-    final newFrame = getTerminalFrame(id: widget.terminalId);
-    if (newFrame != null) {
-      if (newFrame.isClosed) {
-        widget.onClosed?.call();
-        return;
-      }
-      setState(() {
-        _frame = newFrame;
-      });
-    }
+    _applyLatestUpdate();
   }
 
   // Fetches latest buffered output when tab becomes active.
   void _fetchLatestFrame() {
     if (!mounted) return;
-    final newFrame = getTerminalFrame(id: widget.terminalId);
-    if (newFrame != null && mounted) {
-      if (newFrame.isClosed) {
-        widget.onClosed?.call();
-        return;
-      }
-      setState(() {
-        _frame = newFrame;
-      });
+    _applyLatestUpdate();
+  }
+
+  // Patches only the rows Rust reports as changed since the last update.
+  void _applyLatestUpdate() {
+    final update = getTerminalUpdate(id: widget.terminalId, forceFull: false);
+    if (update == null) return;
+    if (update.isClosed) {
+      widget.onClosed?.call();
+      return;
     }
+    setState(() {
+      _screen.apply(update);
+    });
   }
 
   void _handleFocusChange() {
@@ -180,12 +176,12 @@ class _TerminalViewState extends State<TerminalView>
     double padLeft = 0.0,
     double padTop = 0.0,
   }) {
-    final frame = _frame;
+    final screen = _screen;
     int col = ((position.dx - padLeft) / charWidth).floor();
     int row = ((position.dy - padTop) / charHeight).floor();
-    if (frame != null) {
-      col = col.clamp(0, frame.cols - 1);
-      row = row.clamp(0, frame.rows - 1);
+    if (!screen.isEmpty) {
+      col = col.clamp(0, screen.cols - 1);
+      row = row.clamp(0, screen.rows - 1);
     } else {
       col = col.clamp(0, 9999);
       row = row.clamp(0, 9999);
@@ -193,8 +189,8 @@ class _TerminalViewState extends State<TerminalView>
     return (col: col, row: row);
   }
 
-  /// Extract the plain-text content of the current selection from [frame].
-  String _extractSelection(TerminalFrame frame) {
+  /// Extract the plain-text content of the current selection from [screen].
+  String _extractSelection(TerminalScreen screen) {
     final start = _selectionStart;
     final end = _selectionEnd;
     if (start == null || end == null) return '';
@@ -212,27 +208,24 @@ class _TerminalViewState extends State<TerminalView>
 
     final buffer = StringBuffer();
     for (int y = a.row; y <= b.row; y++) {
-      if (y >= frame.lines.length) break;
-      final line = frame.lines[y];
-      final chars = line.characters.toList();
+      if (y >= screen.rows) break;
+      final line = screen.lines[y];
+      final chars = line?.text.characters.toList() ?? const <String>[];
+      final flags = line?.flags;
 
-      final startCol = (y == a.row) ? a.col.clamp(0, frame.cols - 1) : 0;
+      final startCol = (y == a.row) ? a.col.clamp(0, screen.cols - 1) : 0;
       final endCol = (y == b.row)
-          ? b.col.clamp(0, frame.cols - 1)
-          : frame.cols - 1;
+          ? b.col.clamp(0, screen.cols - 1)
+          : screen.cols - 1;
 
       bool isWrapped = false;
-      if (y < b.row) {
-        final lastColIdx = y * frame.cols + (frame.cols - 1);
-        if (lastColIdx < frame.flags.length) {
-          isWrapped = (frame.flags[lastColIdx] & 128) != 0; // bit 7: WRAPLINE
-        }
+      if (y < b.row && flags != null && flags.isNotEmpty) {
+        isWrapped = (flags[flags.length - 1] & 128) != 0; // bit 7: WRAPLINE
       }
 
       for (int x = startCol; x <= endCol; x++) {
         if (x < chars.length) {
-          final cellIdx = y * frame.cols + x;
-          final flag = cellIdx < frame.flags.length ? frame.flags[cellIdx] : 0;
+          final flag = flags != null && x < flags.length ? flags[x] : 0;
           final isSpacer = (flag & 512) != 0; // bit 9: WIDE_CHAR_SPACER
           if (!isSpacer) {
             buffer.write(chars[x]);
@@ -296,10 +289,7 @@ class _TerminalViewState extends State<TerminalView>
           double.infinity,
         );
 
-        final currentFrame = _frame;
-        if (currentFrame == null ||
-            currentFrame.rows != rows ||
-            currentFrame.cols != cols) {
+        if (_screen.isEmpty || _screen.rows != rows || _screen.cols != cols) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
               resizeTerminal(id: widget.terminalId, rows: rows, cols: cols);
@@ -314,6 +304,25 @@ class _TerminalViewState extends State<TerminalView>
               _parseHexColor(widget.settings.colorForeground)?.toARGB32() ==
                   (0xFF000000 | t.fg),
           orElse: () => terminalThemes[0],
+        );
+
+        final backgroundColor =
+            _parseHexColor(widget.settings.colorBackground) ??
+            Theme.of(context).scaffoldBackgroundColor;
+        final paintStyle = TerminalPaintStyle(
+          fontSize: fontSize,
+          cellWidth: charWidth,
+          cellHeight: charHeight,
+          textColor:
+              _parseHexColor(widget.settings.colorForeground) ??
+              Theme.of(context).textTheme.bodyMedium?.color ??
+              Colors.white,
+          backgroundColor: backgroundColor,
+          cursorColor:
+              _parseHexColor(widget.settings.colorCursor) ?? Colors.white70,
+          fontFamily: fontFamily,
+          terminalId: widget.terminalId,
+          colorPalette: activeTheme.palette,
         );
 
         return Listener(
@@ -390,9 +399,8 @@ class _TerminalViewState extends State<TerminalView>
               });
 
               if (!isSingleTap) {
-                final frame = _frame;
-                if (frame != null) {
-                  final text = _extractSelection(frame);
+                if (!_screen.isEmpty) {
+                  final text = _extractSelection(_screen);
                   if (text.trim().isNotEmpty) {
                     Clipboard.setData(ClipboardData(text: text));
                   }
@@ -460,9 +468,8 @@ class _TerminalViewState extends State<TerminalView>
 
                     // Copy selection to clipboard
                     if (isCopy) {
-                      final frame = _frame;
-                      if (frame != null) {
-                        final text = _extractSelection(frame);
+                      if (!_screen.isEmpty) {
+                        final text = _extractSelection(_screen);
                         if (text.trim().isNotEmpty) {
                           Clipboard.setData(ClipboardData(text: text));
                         }
@@ -525,40 +532,59 @@ class _TerminalViewState extends State<TerminalView>
                   return KeyEventResult.ignored;
                 },
                 child: Container(
-                  color:
-                      _parseHexColor(widget.settings.colorBackground) ??
-                      Theme.of(context).scaffoldBackgroundColor,
+                  color: backgroundColor,
                   child: Padding(
                     padding: EdgeInsets.only(
                       left: horizontalPadding,
                       top: verticalPadding,
                     ),
-                    child: CustomPaint(
-                      size: Size(gridWidth, gridHeight),
-                      painter: _frame != null
-                          ? TerminalPainter(
-                              _frame!,
-                              fontSize,
-                              charWidth,
-                              charHeight,
-                              _parseHexColor(widget.settings.colorForeground) ??
-                                  Theme.of(
-                                    context,
-                                  ).textTheme.bodyMedium?.color ??
-                                  Colors.white,
-                              _parseHexColor(widget.settings.colorBackground) ??
-                                  Theme.of(context).scaffoldBackgroundColor,
-                              _parseHexColor(widget.settings.colorCursor) ??
-                                  Colors.white70,
-                              fontFamily,
-                              widget.terminalId,
-                              colorPalette: activeTheme.palette,
-                              selectionStart: _selectionStart,
-                              selectionEnd: _selectionEnd,
-                              isFocused: _focusNode.hasFocus,
-                            )
-                          : null,
-                      child: Container(),
+                    // Flutter tracks damage per layer, so the grid is split into one layer
+                    // per row plus small selection and cursor layers. A change then damages
+                    // only the rows or cells it touches instead of the whole terminal.
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        for (int y = 0; y < _screen.rows; y++)
+                          Positioned(
+                            left: 0,
+                            top: y * charHeight,
+                            width: gridWidth,
+                            height: charHeight,
+                            child: RepaintBoundary(
+                              child: CustomPaint(
+                                painter: TerminalRowPainter(
+                                  _screen.lines[y],
+                                  paintStyle,
+                                ),
+                              ),
+                            ),
+                          ),
+                        Positioned.fill(
+                          child: RepaintBoundary(
+                            child: CustomPaint(
+                              painter: TerminalSelectionPainter(
+                                selectionStart: _selectionStart,
+                                selectionEnd: _selectionEnd,
+                                rows: _screen.rows,
+                                cols: _screen.cols,
+                                cellWidth: charWidth,
+                                cellHeight: charHeight,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Positioned.fill(
+                          child: RepaintBoundary(
+                            child: CustomPaint(
+                              painter: TerminalCursorPainter.fromScreen(
+                                _screen,
+                                isFocused: _focusNode.hasFocus,
+                                style: paintStyle,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
