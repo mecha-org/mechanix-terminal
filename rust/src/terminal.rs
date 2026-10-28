@@ -3,26 +3,47 @@ use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::grid::{Dimensions, GridCell};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+// use std::collections::hash_map::DefaultHasher;
+// use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-pub struct TerminalFrame {
-    pub rows: u16,
-    pub cols: u16,
-    pub lines: Vec<String>,
+/// One visible screen row. `fg_colors`, `bg_colors` and `flags` hold one entry per column.
+pub struct TerminalRow {
+    pub index: u16,
+    pub text: String,
     pub fg_colors: Vec<u32>,
     pub bg_colors: Vec<u32>,
     pub flags: Vec<u16>,
+}
+
+/// Screen changes since the previous update for the same terminal.
+pub struct TerminalUpdate {
+    pub rows: u16,
+    pub cols: u16,
+    /// Every row is included; the receiver must drop the rows it holds.
+    pub full: bool,
+    pub changed_rows: Vec<TerminalRow>,
     pub cursor_x: u16,
     pub cursor_y: u16,
+    pub cursor_visible: bool,
     pub is_closed: bool,
+}
+
+/// What the Dart side currently holds, so updates only carry rows that actually changed.
+#[derive(Default)]
+struct SentState {
+    cols: usize,
+    rows: usize,
+    // row_hashes: Vec<u64>,
+    cursor: Option<(u16, u16, bool)>,
 }
 
 pub struct TerminalCell {
@@ -49,6 +70,7 @@ pub struct FlutterTerminal {
     pub dirty: Arc<AtomicBool>,
     pub is_closed: Arc<AtomicBool>,
     child_pid: Option<i32>,
+    sent: Mutex<SentState>,
 }
 
 #[cfg(unix)]
@@ -167,6 +189,163 @@ fn resolve_color(color: ansi::Color) -> u32 {
     }
 }
 
+fn build_row(term: &Term<VoidListener>, y: usize, cols: usize) -> TerminalRow {
+    let grid = term.grid();
+    let line_idx = Line(y as i32 - grid.display_offset() as i32);
+
+    let mut text = String::with_capacity(cols);
+    let mut fg_colors = Vec::with_capacity(cols);
+    let mut bg_colors = Vec::with_capacity(cols);
+    let mut flags = Vec::with_capacity(cols);
+
+    for col in 0..cols {
+        let cell = &grid[line_idx][Column(col)];
+        let is_spacer = cell.flags().contains(Flags::WIDE_CHAR_SPACER);
+        if !is_spacer {
+            text.push(cell.c);
+            // Append zero-width characters (combining accents/diacritics) to preserve grapheme clusters.
+            if let Some(zerowidth) = cell.zerowidth() {
+                for &zw in zerowidth {
+                    text.push(zw);
+                }
+            }
+        }
+
+        fg_colors.push(resolve_color(cell.fg));
+        bg_colors.push(resolve_color(cell.bg));
+
+        let mut attr = 0u16;
+        let f = cell.flags();
+        if f.contains(Flags::BOLD) {
+            attr |= 1;
+        }
+        if f.contains(Flags::ITALIC) {
+            attr |= 2;
+        }
+        if f.contains(Flags::UNDERLINE) {
+            attr |= 4;
+        }
+        if f.contains(Flags::DIM) {
+            attr |= 8;
+        }
+        if f.contains(Flags::INVERSE) {
+            attr |= 16;
+        }
+        if f.contains(Flags::STRIKEOUT) {
+            attr |= 32;
+        }
+        if f.contains(Flags::HIDDEN) {
+            attr |= 64;
+        }
+        if f.contains(Flags::WRAPLINE) {
+            attr |= 128;
+        }
+        if f.contains(Flags::WIDE_CHAR) {
+            attr |= 256;
+        }
+        if is_spacer {
+            attr |= 512;
+        }
+
+        flags.push(attr);
+    }
+
+    TerminalRow {
+        index: y as u16,
+        text,
+        fg_colors,
+        bg_colors,
+        flags,
+    }
+}
+
+// fn hash_row(row: &TerminalRow) -> u64 {
+//     let mut hasher = DefaultHasher::new();
+//     row.text.hash(&mut hasher);
+//     row.fg_colors.hash(&mut hasher);
+//     row.bg_colors.hash(&mut hasher);
+//     row.flags.hash(&mut hasher);
+//     hasher.finish()
+// }
+
+/// Drains alacritty's damage and returns the damaged rows.
+///
+/// Damage over-reports: alacritty always damages the cursor cells, so the cursor rows are
+/// resent even when their text is unchanged. The commented-out hash filter drops those.
+fn build_update(
+    term: &mut Term<VoidListener>,
+    sent: &mut SentState,
+    force_full: bool,
+    is_closed: bool,
+) -> Option<TerminalUpdate> {
+    let rows = term.screen_lines();
+    let cols = term.columns();
+
+    let mut damaged = vec![false; rows];
+    let full_damage = match term.damage() {
+        TermDamage::Full => true,
+        TermDamage::Partial(lines) => {
+            for bounds in lines {
+                if bounds.line < rows {
+                    damaged[bounds.line] = true;
+                }
+            }
+            false
+        }
+    };
+    term.reset_damage();
+
+    let full = force_full || sent.cols != cols || sent.rows != rows;
+    if full {
+        sent.cols = cols;
+        sent.rows = rows;
+        // sent.row_hashes = vec![0; rows];
+    }
+
+    let mut changed_rows = Vec::new();
+    for y in 0..rows {
+        if !(full || full_damage || damaged[y]) {
+            continue;
+        }
+        let row = build_row(term, y, cols);
+        // let hash = hash_row(&row);
+        // if !full && sent.row_hashes[y] == hash {
+        //     continue;
+        // }
+        // sent.row_hashes[y] = hash;
+        changed_rows.push(row);
+    }
+
+    let grid = term.grid();
+    let cursor_y = grid.cursor.point.line.0 + grid.display_offset() as i32;
+    let cursor_y = if (0..rows as i32).contains(&cursor_y) {
+        cursor_y as u16
+    } else {
+        u16::MAX
+    };
+    let cursor_x = grid.cursor.point.column.0 as u16;
+    let cursor_visible = term.mode().contains(TermMode::SHOW_CURSOR);
+
+    let cursor = Some((cursor_x, cursor_y, cursor_visible));
+    let cursor_changed = sent.cursor != cursor;
+    sent.cursor = cursor;
+
+    if !full && !is_closed && !cursor_changed && changed_rows.is_empty() {
+        return None;
+    }
+
+    Some(TerminalUpdate {
+        rows: rows as u16,
+        cols: cols as u16,
+        full,
+        changed_rows,
+        cursor_x,
+        cursor_y,
+        cursor_visible,
+        is_closed,
+    })
+}
+
 impl FlutterTerminal {
     pub fn new(rows: u16, cols: u16, cwd: Option<String>) -> Option<Self> {
         let pty_system = native_pty_system();
@@ -238,6 +417,7 @@ impl FlutterTerminal {
             dirty,
             is_closed,
             child_pid,
+            sent: Mutex::new(SentState::default()),
         })
     }
 
@@ -288,100 +468,17 @@ impl FlutterTerminal {
         self.dirty.store(true, Ordering::SeqCst);
     }
 
-    pub fn get_frame(&self) -> Option<TerminalFrame> {
+    /// Returns the rows changed since the previous call, or `None` if nothing visible changed.
+    /// `force_full` resends every row, for a receiver that holds no screen yet.
+    pub fn get_update(&self, force_full: bool) -> Option<TerminalUpdate> {
         let is_closed = self.is_closed.load(Ordering::SeqCst);
-        if !self.dirty.swap(false, Ordering::SeqCst) && !is_closed {
+        if !self.dirty.swap(false, Ordering::SeqCst) && !is_closed && !force_full {
             return None;
         }
 
-        let term = self.term.read();
-        let grid = term.grid();
-        let display_offset = grid.display_offset();
-
-        let rows = term.screen_lines();
-        let cols = term.columns();
-
-        let mut lines = Vec::with_capacity(rows);
-        let mut fg_colors = Vec::with_capacity(rows * cols);
-        let mut bg_colors = Vec::with_capacity(rows * cols);
-        let mut flags_vec = Vec::with_capacity(rows * cols);
-
-        for y in 0..rows {
-            let line_idx = Line(y as i32 - display_offset as i32);
-            let mut line_str = String::with_capacity(cols);
-
-            for col in 0..cols {
-                let cell = &grid[line_idx][Column(col)];
-                let is_spacer = cell.flags().contains(Flags::WIDE_CHAR_SPACER);
-                if !is_spacer {
-                    line_str.push(cell.c);
-                    // Append zero-width characters (combining accents/diacritics) to preserve grapheme clusters.
-                    if let Some(zerowidth) = cell.zerowidth() {
-                        for &zw in zerowidth {
-                            line_str.push(zw);
-                        }
-                    }
-                }
-
-                fg_colors.push(resolve_color(cell.fg));
-                bg_colors.push(resolve_color(cell.bg));
-
-                let mut attr = 0u16;
-                let f = cell.flags();
-                if f.contains(Flags::BOLD) {
-                    attr |= 1;
-                }
-                if f.contains(Flags::ITALIC) {
-                    attr |= 2;
-                }
-                if f.contains(Flags::UNDERLINE) {
-                    attr |= 4;
-                }
-                if f.contains(Flags::DIM) {
-                    attr |= 8;
-                }
-                if f.contains(Flags::INVERSE) {
-                    attr |= 16;
-                }
-                if f.contains(Flags::STRIKEOUT) {
-                    attr |= 32;
-                }
-                if f.contains(Flags::HIDDEN) {
-                    attr |= 64;
-                }
-                if f.contains(Flags::WRAPLINE) {
-                    attr |= 128;
-                }
-                if f.contains(Flags::WIDE_CHAR) {
-                    attr |= 256;
-                }
-                if is_spacer {
-                    attr |= 512;
-                }
-
-                flags_vec.push(attr);
-            }
-            lines.push(line_str);
-        }
-
-        let raw_cursor_y = term.grid().cursor.point.line.0 as i32;
-        let adjusted_cursor_y = raw_cursor_y + display_offset as i32;
-
-        Some(TerminalFrame {
-            rows: rows as u16,
-            cols: cols as u16,
-            lines,
-            fg_colors,
-            bg_colors,
-            flags: flags_vec,
-            cursor_x: term.grid().cursor.point.column.0 as u16,
-            cursor_y: if (0..rows as i32).contains(&adjusted_cursor_y) {
-                adjusted_cursor_y as u16
-            } else {
-                65535
-            },
-            is_closed: self.is_closed.load(Ordering::SeqCst),
-        })
+        let mut term = self.term.write();
+        let mut sent = self.sent.lock();
+        build_update(&mut term, &mut sent, force_full, is_closed)
     }
 
     pub fn scroll(&self, lines: i32) {
@@ -488,18 +585,93 @@ mod tests {
     }
 
     #[test]
-    fn test_get_frame_lines_and_attributes() {
+    fn test_get_update_full_rows_and_attributes() {
         let term = FlutterTerminal::new(24, 80, None).expect("Terminal should create");
         std::thread::sleep(Duration::from_millis(50));
-        let frame = term.get_frame();
-        if let Some(f) = frame {
-            assert_eq!(f.rows, 24);
-            assert_eq!(f.cols, 80);
-            assert_eq!(f.lines.len(), 24);
-            assert_eq!(f.fg_colors.len(), 24 * 80);
-            assert_eq!(f.bg_colors.len(), 24 * 80);
-            assert_eq!(f.flags.len(), 24 * 80);
+        let update = term.get_update(true).expect("Forced update should exist");
+        assert!(update.full);
+        assert_eq!(update.rows, 24);
+        assert_eq!(update.cols, 80);
+        assert_eq!(update.changed_rows.len(), 24);
+        for (y, row) in update.changed_rows.iter().enumerate() {
+            assert_eq!(row.index as usize, y);
+            assert_eq!(row.fg_colors.len(), 80);
+            assert_eq!(row.bg_colors.len(), 80);
+            assert_eq!(row.flags.len(), 80);
         }
+    }
+
+    fn test_term(rows: usize, cols: usize) -> Term<VoidListener> {
+        Term::new(Config::default(), &SimpleDimensions { cols, rows }, VoidListener)
+    }
+
+    fn indices(update: &TerminalUpdate) -> Vec<u16> {
+        update.changed_rows.iter().map(|r| r.index).collect()
+    }
+
+    #[test]
+    fn test_update_sends_damaged_rows() {
+        let mut term = test_term(24, 80);
+        let mut sent = SentState::default();
+        let first = build_update(&mut term, &mut sent, false, false).expect("First update");
+        assert!(first.full);
+        assert_eq!(first.changed_rows.len(), 24);
+
+        let mut processor = ansi::Processor::<NoopTimeout>::new();
+        processor.advance(&mut term, b"\x1b[5;1Hhello");
+        let update = build_update(&mut term, &mut sent, false, false).expect("Row 5 changed");
+        assert!(!update.full);
+        // Row 0 is resent because the cursor left it.
+        assert_eq!(indices(&update), vec![0, 4]);
+        assert!(update.changed_rows[1].text.starts_with("hello"));
+        assert_eq!((update.cursor_x, update.cursor_y), (5, 4));
+    }
+
+    #[test]
+    fn test_cursor_move_resends_old_and_new_cursor_rows() {
+        let mut term = test_term(24, 80);
+        let mut sent = SentState::default();
+        build_update(&mut term, &mut sent, false, false);
+
+        let mut processor = ansi::Processor::<NoopTimeout>::new();
+        processor.advance(&mut term, b"\x1b[10;10H");
+        let update = build_update(&mut term, &mut sent, false, false).expect("Cursor moved");
+        assert_eq!(indices(&update), vec![0, 9]);
+        assert_eq!((update.cursor_x, update.cursor_y), (9, 9));
+    }
+
+    #[test]
+    fn test_no_change_resends_cursor_row() {
+        let mut term = test_term(24, 80);
+        let mut sent = SentState::default();
+        build_update(&mut term, &mut sent, false, false);
+        let update = build_update(&mut term, &mut sent, false, false).expect("Cursor row damaged");
+        assert_eq!(indices(&update), vec![0]);
+    }
+
+    #[test]
+    fn test_hidden_cursor_is_reported() {
+        let mut term = test_term(24, 80);
+        let mut sent = SentState::default();
+        build_update(&mut term, &mut sent, false, false);
+
+        let mut processor = ansi::Processor::<NoopTimeout>::new();
+        processor.advance(&mut term, b"\x1b[?25l");
+        let update = build_update(&mut term, &mut sent, false, false).expect("Cursor hidden");
+        assert!(!update.cursor_visible);
+    }
+
+    #[test]
+    fn test_resize_sends_full_update() {
+        let mut term = test_term(24, 80);
+        let mut sent = SentState::default();
+        build_update(&mut term, &mut sent, false, false);
+
+        term.resize(SimpleDimensions { cols: 100, rows: 30 });
+        let update = build_update(&mut term, &mut sent, false, false).expect("Resized");
+        assert!(update.full);
+        assert_eq!((update.rows, update.cols), (30, 100));
+        assert_eq!(update.changed_rows.len(), 30);
     }
 
     #[test]
@@ -524,10 +696,10 @@ mod tests {
             "Terminal should be marked is_closed after shell exits"
         );
 
-        // get_frame should return a frame with is_closed == true
-        let frame = term.get_frame();
-        assert!(frame.is_some());
-        assert!(frame.unwrap().is_closed);
+        // get_update should return an update with is_closed == true
+        let update = term.get_update(false);
+        assert!(update.is_some());
+        assert!(update.unwrap().is_closed);
     }
 
     #[test]
@@ -562,9 +734,8 @@ mod tests {
             // "e" + combining acute accent U+0301 (UTF-8: 0xCC, 0x81)
             processor.advance(&mut *term_lock, "e\u{0301}".as_bytes());
         }
-        term.dirty.store(true, Ordering::SeqCst);
-        let frame = term.get_frame().expect("Frame should exist");
-        let first_line = &frame.lines[0];
+        let update = term.get_update(true).expect("Update should exist");
+        let first_line = &update.changed_rows[0].text;
         assert!(
             first_line.starts_with("e\u{0301}"),
             "Line should contain combining acute accent, got: {:?}",

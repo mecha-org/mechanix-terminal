@@ -1,4 +1,4 @@
-use crate::terminal::{FlutterTerminal, TerminalFrame};
+use crate::terminal::{FlutterTerminal, TerminalUpdate};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -108,10 +108,11 @@ pub fn create_terminal_stream(sink: StreamSink<u32>) {
     });
 }
 
+/// Rows changed since the previous call for `id`; `force_full` resends the whole screen.
 #[flutter_rust_bridge::frb(sync)]
-pub fn get_terminal_frame(id: u32) -> Option<TerminalFrame> {
+pub fn get_terminal_update(id: u32, force_full: bool) -> Option<TerminalUpdate> {
     let lock = terminals().read();
-    lock.get(&id).and_then(|t| t.get_frame())
+    lock.get(&id).and_then(|t| t.get_update(force_full))
 }
 
 #[flutter_rust_bridge::frb(sync)]
